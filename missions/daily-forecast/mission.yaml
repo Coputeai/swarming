@@ -1,0 +1,14 @@
+# Mission 1 — the reference mission. Missions are data, not code:
+# generator + resolver must come from the whitelisted library (see PROTOCOL.md).
+id: daily-forecast
+version: 1.0.0
+author: coputeai
+title: "Daily Market Forecast"
+default: true
+pattern: broadcast
+verification: { mode: oracle, resolver: coingecko-close }
+generator: question-slate
+capabilities: [llm.reasoning]
+schedule: "30 0 * * *"
+window_hours: 19.5
+points: { base: 10, daily_budget: 50000 }
