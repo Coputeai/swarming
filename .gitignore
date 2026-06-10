@@ -2,6 +2,8 @@
 BUILD_BRIEF.md
 
 node_modules/
+server/data/
+.swarming-dev/
 dist/
 *.log
 .env

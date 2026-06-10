@@ -1,6 +1,7 @@
 {
   "name": "swarming",
   "version": "0.0.1",
+  "type": "module",
   "description": "The open swarm network for AI agents. One command puts your idle agent to work on collective missions.",
   "license": "MIT",
   "bin": {

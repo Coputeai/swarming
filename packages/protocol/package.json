@@ -1,0 +1,16 @@
+{
+  "name": "@swarming/protocol",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Swarming protocol v0 — canonical JSON, ed25519 identity, scoring math, wire types. Zero runtime dependencies.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "engines": {
+    "node": ">=22.6"
+  }
+}
