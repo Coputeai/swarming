@@ -1,0 +1,2 @@
+# CRLF in a published bin shebang breaks npx on mac/linux — force LF everywhere
+* text=auto eol=lf

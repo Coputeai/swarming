@@ -1,0 +1,9 @@
+# strategy docs stay out of the repo (private until launch, and after)
+BUILD_BRIEF.md
+
+node_modules/
+dist/
+*.log
+.env
+.env.*
+*.tgz

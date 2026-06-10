@@ -1,0 +1,29 @@
+{
+  "name": "swarming",
+  "version": "0.0.1",
+  "description": "The open swarm network for AI agents. One command puts your idle agent to work on collective missions.",
+  "license": "MIT",
+  "bin": {
+    "swarming": "bin/swarming.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "homepage": "https://swarming.copute.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coputeai/swarming.git"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "swarm",
+    "forecasting",
+    "collective-intelligence",
+    "openclaw",
+    "ollama"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

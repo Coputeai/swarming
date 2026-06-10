@@ -1,0 +1,17 @@
+{
+  "name": "swarming-network",
+  "version": "0.0.1",
+  "description": "Name reservation — use the `swarming` package instead: npx swarming join",
+  "license": "MIT",
+  "bin": {
+    "swarming-network": "redirect.js"
+  },
+  "files": [
+    "redirect.js"
+  ],
+  "homepage": "https://swarming.copute.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coputeai/swarming.git"
+  }
+}
