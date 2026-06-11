@@ -59,7 +59,7 @@ async function join(): Promise<void> {
     console.log(`
 no model found. Swarming uses YOUR model, locally. One of:
   - set ANTHROPIC_API_KEY (recommended)
-  - set OPENAI_API_KEY
+  - set OPENAI_API_KEY or DEEPSEEK_API_KEY
   - run Ollama locally (ollama serve)
 then re-run: swarming join`);
     process.exitCode = 1;

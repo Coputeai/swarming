@@ -10,11 +10,13 @@ export interface ModelBackend {
 
 const ANTHROPIC_MODEL = process.env.SWARMING_ANTHROPIC_MODEL ?? "claude-opus-4-8";
 const OPENAI_MODEL = process.env.SWARMING_OPENAI_MODEL ?? "gpt-4o";
+const DEEPSEEK_MODEL = process.env.SWARMING_DEEPSEEK_MODEL ?? "deepseek-chat";
 
 export async function detectModel(): Promise<ModelBackend | null> {
   if (process.env.SWARMING_MODEL === "mock") return mockBackend();
   if (process.env.ANTHROPIC_API_KEY) return anthropicBackend(process.env.ANTHROPIC_API_KEY);
   if (process.env.OPENAI_API_KEY) return openaiBackend(process.env.OPENAI_API_KEY);
+  if (process.env.DEEPSEEK_API_KEY) return deepseekBackend(process.env.DEEPSEEK_API_KEY);
   const ollama = await detectOllama();
   if (ollama) return ollama;
   return null;
@@ -54,6 +56,23 @@ function openaiBackend(apiKey: string): ModelBackend {
         body: JSON.stringify({ model: OPENAI_MODEL, messages: [{ role: "user", content: prompt }] }),
       });
       if (!res.ok) throw new Error(`OpenAI API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      const json = (await res.json()) as { choices: { message: { content: string } }[] };
+      return json.choices[0].message.content;
+    },
+  };
+}
+
+function deepseekBackend(apiKey: string): ModelBackend {
+  // OpenAI-compatible wire format on api.deepseek.com
+  return {
+    model_class: `deepseek/${DEEPSEEK_MODEL}`,
+    complete: async (prompt) => {
+      const res = await fetch("https://api.deepseek.com/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: DEEPSEEK_MODEL, messages: [{ role: "user", content: prompt }] }),
+      });
+      if (!res.ok) throw new Error(`DeepSeek API ${res.status}: ${(await res.text()).slice(0, 300)}`);
       const json = (await res.json()) as { choices: { message: { content: string } }[] };
       return json.choices[0].message.content;
     },
