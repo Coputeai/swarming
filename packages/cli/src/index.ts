@@ -15,6 +15,7 @@ import { API_BASE, configDir, ensureSwarmingMd, loadIdentity, loadOrCreateKeypai
 import { api, ApiError } from "./api.ts";
 import { detectModel } from "./model.ts";
 import { answerTask } from "./predict.ts";
+import { scheduleDaily } from "./schedule.ts";
 
 const BEE = "\u{1F41D}";
 
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
     case "missions": return missions();
     case "enable": return subscribe(arg, true);
     case "disable": return subscribe(arg, false);
+    case "schedule-daily": return scheduleDaily();
     case "create-mission":
       console.log("create-mission: scaffold coming in v0.2 — for now copy an existing package in missions/ and open a PR.");
       return;
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
   swarming missions      browse the mission catalog
   swarming enable <id>   opt in to a mission (everything is opt-in)
   swarming disable <id>  opt out
+  swarming schedule-daily  add a daily run to cron / Task Scheduler (asks first)
 `);
   }
 }

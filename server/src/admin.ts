@@ -65,14 +65,32 @@ switch (cmd) {
   }
 
   case "resolve": {
-    const [workunitId, outcomesFile] = args;
-    const outcomes = JSON.parse(readFileSync(outcomesFile, "utf8")) as Record<string, number | string>;
-    const wu = db.prepare("SELECT payload_json FROM workunits WHERE workunit_id = ?").get(workunitId) as
-      | { payload_json: string } | undefined;
+    const fileArg = args.find((a) => !a.startsWith("--") && a !== args[0]);
+    const auto = args.includes("--auto");
+    const workunitId = args[0];
+    const wu = db.prepare("SELECT payload_json, published_at, closes_at FROM workunits WHERE workunit_id = ?").get(workunitId) as
+      | { payload_json: string; published_at: string; closes_at: string } | undefined;
     if (!wu) throw new Error(`unknown workunit ${workunitId}`);
     const questions = (JSON.parse(wu.payload_json) as { questions: Question[] }).questions;
-    for (const q of questions) {
-      if (!(q.q_id in outcomes)) throw new Error(`missing outcome for ${q.q_id}`);
+
+    const outcomes: Record<string, number | string> = fileArg
+      ? (JSON.parse(readFileSync(fileArg, "utf8")) as Record<string, number | string>)
+      : {};
+
+    if (auto) {
+      for (const q of questions) {
+        if (q.q_id in outcomes) continue;
+        const out = await resolveCoingecko(q, wu.published_at, wu.closes_at);
+        if (out !== null) {
+          outcomes[q.q_id] = out;
+          console.log(`auto-resolved ${q.q_id} = ${out} (${q.resolution.source}, ${q.resolution.rule})`);
+        }
+      }
+    }
+
+    const missing = questions.filter((q) => !(q.q_id in outcomes)).map((q) => q.q_id);
+    if (missing.length > 0) {
+      throw new Error(`unresolved questions: ${missing.join(", ")} — supply an outcomes file for these`);
     }
     db.prepare("UPDATE workunits SET outcome_json = ?, status = 'resolved' WHERE workunit_id = ?").run(
       JSON.stringify(outcomes), workunitId,
@@ -182,6 +200,30 @@ switch (cmd) {
   }
 
   default:
-    console.error("usage: admin.ts <sync-missions|publish|close|resolve|score|report> ...");
+    console.error("usage: admin.ts <sync-missions|publish|close|resolve [file] [--auto]|score|report> ...");
     process.exit(1);
+}
+
+/**
+ * Deterministic oracle for `coingecko:<coin-id>` sources with rule
+ * "close>=open": price nearest the workunit's publish time vs nearest its
+ * close time, from CoinGecko's public market_chart/range API. Anything else
+ * returns null (operator must supply the outcome explicitly).
+ */
+async function resolveCoingecko(q: Question, publishedAt: string, closesAt: string): Promise<0 | 1 | null> {
+  const m = q.resolution.source.match(/^coingecko:([a-z0-9-]+)$/);
+  if (!m || q.resolution.rule !== "close>=open" || q.type !== "binary") return null;
+  const from = Math.floor(new Date(publishedAt).getTime() / 1000) - 3600;
+  const to = Math.floor(Math.min(new Date(closesAt).getTime(), Date.now()) / 1000) + 3600;
+  const url = `https://api.coingecko.com/api/v3/coins/${m[1]}/market_chart/range?vs_currency=usd&from=${from}&to=${to}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`coingecko ${res.status} for ${m[1]}`);
+  const { prices } = (await res.json()) as { prices: [number, number][] };
+  if (!prices || prices.length < 2) throw new Error(`coingecko returned too few points for ${m[1]}`);
+  const nearest = (t: number) =>
+    prices.reduce((best, p) => (Math.abs(p[0] - t) < Math.abs(best[0] - t) ? p : best))[1];
+  const open = nearest(new Date(publishedAt).getTime());
+  const close = nearest(Math.min(new Date(closesAt).getTime(), Date.now()));
+  console.log(`  ${m[1]}: open=${open.toFixed(2)} close=${close.toFixed(2)}`);
+  return close >= open ? 1 : 0;
 }
