@@ -45,7 +45,11 @@ switch (cmd) {
     const generator = GENERATORS[manifest.generator];
     const payload = generator(JSON.parse(readFileSync(inputFile, "utf8")));
     const date = new Date().toISOString().slice(0, 10);
-    const workunitId = `wu_${missionId}_${date}`;
+    let workunitId = `wu_${missionId}_${date}`;
+    let n = 2;
+    while (db.prepare("SELECT 1 FROM workunits WHERE workunit_id = ?").get(workunitId)) {
+      workunitId = `wu_${missionId}_${date}-${n++}`;
+    }
     const closes = closesAt ?? isoPlusHours(manifest.window_hours);
     db.prepare(
       `INSERT INTO workunits (workunit_id, mission_id, payload_json, published_at, closes_at, resolve_at, status)

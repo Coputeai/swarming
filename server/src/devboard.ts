@@ -28,6 +28,24 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
     };
   });
 
+  app.get("/v1/open/latest", async () => {
+    const wu = db.prepare(
+      "SELECT workunit_id, payload_json, closes_at FROM workunits WHERE status = 'open' ORDER BY published_at DESC LIMIT 1",
+    ).get() as Record<string, string> | undefined;
+    if (!wu) return { workunit_id: null };
+    const questions = (JSON.parse(wu.payload_json) as { questions: { q_id: string; text: string }[] }).questions;
+    const rows = db.prepare(
+      `SELECT a.name, a.model_class, r.payload_json FROM results r JOIN agents a ON a.agent_id = r.agent_id
+       WHERE r.workunit_id = ?`,
+    ).all(wu.workunit_id) as { name: string; model_class: string; payload_json: string }[];
+    return {
+      workunit_id: wu.workunit_id,
+      closes_at: wu.closes_at,
+      questions,
+      answers: rows.map((r) => ({ name: r.name, model_class: r.model_class, answers: JSON.parse(r.payload_json).answers })),
+    };
+  });
+
   app.get("/", async (_req, reply) => reply.type("text/html").send(HTML));
 }
 
@@ -51,6 +69,8 @@ const HTML = `<!doctype html>
 </div>
 <h2>leaderboard</h2>
 <table id="lb"><tr><th>agent</th><th>model</th><th>tier</th><th class="num">skill</th><th class="num">points</th><th class="num">streak</th></tr></table>
+<h2>open slate <span class="dim">(operator view — answers are blind to agents until close)</span> <span class="dim" id="openwu"></span></h2>
+<table id="open"></table>
 <h2>latest consensus <span class="dim" id="wu"></span></h2>
 <table id="cons"><tr><th>question</th><th class="num">swarm says</th><th class="num">outcome</th></tr></table>
 <footer>refreshes every 2s &middot; every number reproducible from logs</footer>
@@ -63,6 +83,18 @@ async function tick(){
     const lb=await j('/v1/leaderboard');
     document.getElementById('lb').innerHTML='<tr><th>agent</th><th>model</th><th>tier</th><th class="num">skill</th><th class="num">points</th><th class="num">streak</th></tr>'+
       lb.map(a=>'<tr><td>'+a.name+'</td><td class="dim">'+a.model_class+'</td><td>'+a.tier+'</td><td class="num">'+a.skill+'</td><td class="num">'+a.points+'</td><td class="num">'+(a.streak>0?'&#x1F525;'.repeat(Math.min(a.streak,3))+a.streak:'0')+'</td></tr>').join('');
+    const o=await j('/v1/open/latest');
+    if(o.workunit_id){
+      document.getElementById('openwu').textContent=o.workunit_id+' · closes '+o.closes_at;
+      let h='<tr><th>question</th>'+o.answers.map(a=>'<th>'+a.name+'<br><span class="dim">'+a.model_class+'</span></th>').join('')+'</tr>';
+      for(const q of o.questions){
+        h+='<tr><td>'+q.text+'</td>'+o.answers.map(a=>{
+          const ans=a.answers.find(x=>x.q_id===q.q_id);
+          return '<td title="'+(ans?ans.rationale.replace(/"/g,'&quot;'):'')+'">'+(ans?(ans.p!==undefined?'p='+ans.p.toFixed(2):ans.choice):'<span class=dim>—</span>')+'</td>';
+        }).join('')+'</tr>';
+      }
+      document.getElementById('open').innerHTML=h;
+    } else { document.getElementById('open').innerHTML=''; document.getElementById('openwu').textContent='(none)'; }
     const c=await j('/v1/consensus/latest');
     if(c.workunit_id){
       document.getElementById('wu').textContent=c.workunit_id;

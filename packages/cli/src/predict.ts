@@ -44,8 +44,11 @@ export function parseAnswers(raw: string, questions: Question[]): Answer[] {
       if (Number.isNaN(p)) throw new Error(`model gave no probability for ${q.q_id}`);
       return { q_id: q.q_id, p, rationale };
     }
-    const choice = String(a.choice ?? "");
-    if (!q.choices.includes(choice)) throw new Error(`model chose '${choice}' for ${q.q_id}, not in options`);
+    const raw2 = String(a.choice ?? "").trim();
+    // small local models drift on casing/diacritics — match leniently, submit canonically
+    const choice = q.choices.find((c) => c.localeCompare(raw2, undefined, { sensitivity: "base" }) === 0)
+      ?? q.choices.find((c) => c.toLowerCase().includes(raw2.toLowerCase()) && raw2.length >= 3);
+    if (!choice) throw new Error(`model chose '${raw2}' for ${q.q_id}, not in options`);
     return { q_id: q.q_id, choice, rationale };
   });
 }
@@ -57,6 +60,12 @@ export async function answerTask(
   backend: ModelBackend,
 ): Promise<Answer[]> {
   const prompt = buildPrompt(task, agentName, swarmingMd);
-  const raw = await backend.complete(prompt);
-  return parseAnswers(raw, task.payload.questions);
+  try {
+    return parseAnswers(await backend.complete(prompt), task.payload.questions);
+  } catch (e) {
+    // one retry with the error fed back — smaller models often self-correct
+    const retry = prompt + `\n\nYour previous answer was invalid (${e instanceof Error ? e.message : e}). ` +
+      `Answer again. JSON array only; "choice" must EXACTLY match one of the listed choices.`;
+    return parseAnswers(await backend.complete(retry), task.payload.questions);
+  }
 }
