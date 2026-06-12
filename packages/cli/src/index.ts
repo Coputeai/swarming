@@ -23,7 +23,7 @@ async function main(): Promise<void> {
   const [cmd, arg] = process.argv.slice(2);
   switch (cmd) {
     case "join": return join();
-    case "run": return run();
+    case "run": return run(arg === "--force");
     case "status": return status();
     case "missions": return missions();
     case "enable": return subscribe(arg, true);
@@ -94,7 +94,7 @@ ${BEE} you're in — no open work right now. Next slate publishes 00:30 UTC.
   }
 }
 
-async function run(): Promise<void> {
+async function run(force = false): Promise<void> {
   const identity = loadIdentity();
   if (!identity) {
     console.log(`not joined yet — run: swarming join`);
@@ -102,11 +102,11 @@ async function run(): Promise<void> {
     return;
   }
   const { privateSeed } = loadOrCreateKeypair();
-  const n = await pullAnswerSubmit(identity.agent_id, identity.name, privateSeed);
-  if (n === 0) console.log(`${BEE} nothing open right now (already submitted, or next slate at 00:30 UTC)`);
+  const n = await pullAnswerSubmit(identity.agent_id, identity.name, privateSeed, force);
+  if (n === 0) console.log(`${BEE} nothing open right now (already submitted — use \`run --force\` to resubmit — or next slate at 00:30 UTC)`);
 }
 
-async function pullAnswerSubmit(agentId: string, name: string, privateSeed: Buffer): Promise<number> {
+async function pullAnswerSubmit(agentId: string, name: string, privateSeed: Buffer, force = false): Promise<number> {
   const backend = await detectModel();
   if (!backend) {
     console.log("no model available (set ANTHROPIC_API_KEY / OPENAI_API_KEY or run Ollama)");
@@ -117,7 +117,7 @@ async function pullAnswerSubmit(agentId: string, name: string, privateSeed: Buff
   const { tasks } = (await api.get(`/v1/work?agent_id=${agentId}`)) as { tasks: Task[] };
   let submitted = 0;
   for (const task of tasks) {
-    if (task.already_submitted) continue;
+    if (task.already_submitted && !force) continue;
     console.log(`${BEE} ${task.mission_id} — ${task.payload.questions.length} question(s), closes ${task.deadline}`);
     const answers = await answerTask(task, name, swarmingMd, backend);
     const payload = { answers };

@@ -76,6 +76,7 @@ const HTML = `<!doctype html>
 <footer>refreshes every 2s &middot; every number reproducible from logs</footer>
 <script>
 async function j(u){return (await fetch(u)).json()}
+function yn(p){return p>=0.5?('Yes ('+Math.round(p*100)+'%)'):('No ('+Math.round((1-p)*100)+'%)')}
 async function tick(){
   try{
     const s=await j('/v1/stats');
@@ -90,7 +91,7 @@ async function tick(){
       for(const q of o.questions){
         h+='<tr><td>'+q.text+'</td>'+o.answers.map(a=>{
           const ans=a.answers.find(x=>x.q_id===q.q_id);
-          return '<td title="'+(ans?ans.rationale.replace(/"/g,'&quot;'):'')+'">'+(ans?(ans.p!==undefined?'p='+ans.p.toFixed(2):ans.choice):'<span class=dim>—</span>')+'</td>';
+          return '<td title="'+(ans?ans.rationale.replace(/"/g,'&quot;')+' [p='+(ans.p!==undefined?ans.p.toFixed(2):'-')+']':'')+'">'+(ans?(ans.p!==undefined?yn(ans.p):ans.choice):'<span class=dim>—</span>')+'</td>';
         }).join('')+'</tr>';
       }
       document.getElementById('open').innerHTML=h;
@@ -100,7 +101,7 @@ async function tick(){
       document.getElementById('wu').textContent=c.workunit_id;
       document.getElementById('cons').innerHTML='<tr><th>question</th><th class="num">swarm says</th><th class="num">outcome</th></tr>'+
         Object.entries(c.consensus).map(([q,v])=>{
-          const said=v.p!==undefined?('p='+(v.p===null?'?':v.p.toFixed(2))):v.choice;
+          const said=v.p!==undefined?(v.p===null?'?':yn(v.p)):v.choice;
           const hit=v.p!==undefined?((v.p>=0.5)===(v.outcome===1)):(v.choice===v.outcome);
           return '<tr><td>'+(c.questions[q]||q)+'</td><td class="num">'+said+'</td><td class="num '+(hit?'ok':'bad')+'">'+v.outcome+(hit?' &#x2713;':' &#x2717;')+'</td></tr>';
         }).join('');
