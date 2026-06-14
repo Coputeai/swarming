@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // swarming — the open swarm network client.
 // Commands: join · run · status · missions · enable <id> · disable <id>
-// Read-only by design: fetch JSON task → call YOUR model locally → post JSON
-// result. No shell, no file access outside ~/.swarming, no transactions.
+// The worker is read-only by design: fetch JSON task → call YOUR model locally
+// → post JSON result. No shell, no file access outside ~/.swarming, no
+// transactions. (create-mission is an opt-in authoring helper that, only when
+// you run it, writes a scaffold into ./missions/ in the current directory.)
 
 import {
   PROTOCOL_VERSION,
@@ -16,6 +18,8 @@ import { api, ApiError } from "./api.ts";
 import { detectModel } from "./model.ts";
 import { answerTask } from "./predict.ts";
 import { scheduleDaily } from "./schedule.ts";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join as joinPath } from "node:path";
 
 const BEE = "\u{1F41D}";
 
@@ -29,9 +33,7 @@ async function main(): Promise<void> {
     case "enable": return subscribe(arg, true);
     case "disable": return subscribe(arg, false);
     case "schedule-daily": return scheduleDaily();
-    case "create-mission":
-      console.log("create-mission: scaffold coming in v0.2 — for now copy an existing package in missions/ and open a PR.");
-      return;
+    case "create-mission": return createMission(arg);
     default:
       console.log(`${BEE} swarming — the open swarm network for AI agents
 
@@ -42,6 +44,7 @@ async function main(): Promise<void> {
   swarming enable <id>   opt in to a mission (everything is opt-in)
   swarming disable <id>  opt out
   swarming schedule-daily  add a daily run to cron / Task Scheduler (asks first)
+  swarming create-mission <id>  scaffold a new mission package to open a PR
 `);
   }
 }
@@ -182,6 +185,100 @@ async function subscribe(missionId: string | undefined, enabled: boolean): Promi
     protocol_version: PROTOCOL_VERSION, agent_id: identity.agent_id, mission_id: missionId, enabled, ts, sig,
   });
   console.log(`${BEE} ${missionId} ${enabled ? "enabled" : "disabled"}`);
+}
+
+// lowercase kebab: a letter-led run of letters/digits joined by single hyphens.
+// The id must equal the directory name (the server enforces this on load).
+const MISSION_ID = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+
+function createMission(id: string | undefined): void {
+  if (!id) {
+    console.log("usage: swarming create-mission <id>   (lowercase-kebab, e.g. weekly-rainfall)");
+    process.exitCode = 1;
+    return;
+  }
+  if (!MISSION_ID.test(id)) {
+    console.log(`${BEE} '${id}' isn't a valid mission id — use lowercase kebab-case (letters, digits, single hyphens), e.g. weekly-rainfall`);
+    process.exitCode = 1;
+    return;
+  }
+  const missionsDir = joinPath(process.cwd(), "missions");
+  if (!existsSync(missionsDir)) {
+    console.log(`${BEE} no ./missions directory here — run this from the root of a clone of the Swarming network repo (the folder that contains missions/).`);
+    process.exitCode = 1;
+    return;
+  }
+  const dir = joinPath(missionsDir, id);
+  if (existsSync(dir)) {
+    console.log(`${BEE} missions/${id} already exists — pick another id, or edit that package directly.`);
+    process.exitCode = 1;
+    return;
+  }
+  mkdirSync(joinPath(dir, "prompts"), { recursive: true });
+  writeFileSync(joinPath(dir, "mission.yaml"), missionYaml(id));
+  writeFileSync(joinPath(dir, "prompts", "default.md"), promptTemplate(id));
+  writeFileSync(joinPath(dir, "README.md"), missionReadme(id));
+  console.log(`${BEE} scaffolded missions/${id}
+   edit missions/${id}/mission.yaml       — title, author, verification, schedule
+   edit missions/${id}/prompts/default.md — the prompt your agents receive
+   then open a PR to add it to the network`);
+}
+
+// Templates below are intentionally valid-but-placeholder: generator and
+// resolver default to whitelisted values so the server loads the package, while
+// TODO comments mark what the author must fill in before opening a PR.
+function missionYaml(id: string): string {
+  return `# Mission manifest — missions are DATA, not code. The server only knows
+# generator/resolver *types* from its whitelist (see PROTOCOL.md); fill in the
+# placeholders below, then open a PR.
+id: ${id}
+version: 0.1.0
+author: your-handle                 # TODO: your github / org handle
+title: "TODO: human-readable mission title"
+pattern: broadcast                  # broadcast (everyone answers one slate) | shard
+verification: { mode: oracle, resolver: manual-dev }  # resolver whitelist: coingecko-close | binance-close | manual-dev
+generator: question-slate           # generator whitelist: question-slate
+capabilities: [llm.reasoning]
+schedule: "30 0 * * *"              # cron (UTC) — when a new workunit opens
+window_hours: 19.5                  # how long the slate stays open for answers
+points: { base: 10, daily_budget: 50000 }
+`;
+}
+
+function promptTemplate(id: string): string {
+  return `<!-- prompt template ${id}/prompts@0.1.0 — version recorded per submission -->
+
+You are {agent_name}, an independent agent in the Swarming network.
+
+<!-- TODO: describe the task. {swarming_md} and {questions} are filled in at run time. -->
+
+--- OWNER STRATEGY (SWARMING.md) ---
+{swarming_md}
+--- END OWNER STRATEGY ---
+
+Today's questions:
+{questions}
+
+Respond in the exact JSON format requested. Do not add commentary outside it.
+`;
+}
+
+function missionReadme(id: string): string {
+  return `# ${id}
+
+TODO: one paragraph on what this mission asks agents to predict and how it is
+scored.
+
+## How to ship it
+
+1. Fill in \`mission.yaml\` (title, author, pattern, verification, schedule).
+   Generator and resolver must come from the whitelisted library — see PROTOCOL.md.
+2. Edit \`prompts/default.md\` — the template your agents receive each run.
+3. Open a pull request to add it to the Swarming network.
+
+Missions are declarative data, never code: the network runs your manifest, it
+does not run code you ship.
+`;
 }
 
 main().catch((e) => {
