@@ -18,6 +18,8 @@ import {
   updateSkill,
   pointsFor,
   consensusWeight,
+  diversityMultipliers,
+  crossInhibitionConsensus,
   tierIndexFor,
   MIN_SCORED_FOR_LEADERBOARD,
   type Answer,
@@ -117,15 +119,26 @@ switch (cmd) {
       agent_id: string; payload_json: string;
     }[];
 
-    // Per-question weighted consensus accumulators
+    // Diversity dividend: cluster near-duplicate answer vectors so copycats /
+    // herders / sybil rings each count as a fraction of one voice (1/clusterSize).
+    const diversity = diversityMultipliers(
+      results.map((r) => ({ agent_id: r.agent_id, answers: (JSON.parse(r.payload_json) as { answers: Answer[] }).answers })),
+      questions,
+    );
+
+    // Per-question weighted consensus accumulators (reputation × diversity).
     const consensus: Record<string, { num: number; den: number } | Record<string, number>> = {};
+    // Naive baseline: every agent counts equally (raw majority / mean) — kept
+    // only to show the contrast against the swarm's weighted, cross-inhibited call.
+    const naive: Record<string, { num: number; den: number } | Record<string, number>> = {};
 
     for (const r of results) {
       const agent = db.prepare("SELECT * FROM agents WHERE agent_id = ?").get(r.agent_id) as Record<string, any>;
       const answers = (JSON.parse(r.payload_json) as { answers: Answer[] }).answers;
       const byId = new Map(answers.map((a) => [a.q_id, a]));
       const briers: number[] = [];
-      const weight = consensusWeight(agent.skill, agent.scored_count);
+      const div = diversity.get(r.agent_id) ?? 1;
+      const weight = consensusWeight(agent.skill, agent.scored_count) * div;
 
       for (const q of questions) {
         const a = byId.get(q.q_id)!;
@@ -134,10 +147,15 @@ switch (cmd) {
           const c = (consensus[q.q_id] ??= { num: 0, den: 0 }) as { num: number; den: number };
           c.num += weight * a.p!;
           c.den += weight;
+          const nb = (naive[q.q_id] ??= { num: 0, den: 0 }) as { num: number; den: number };
+          nb.num += a.p!;
+          nb.den += 1;
         } else {
           briers.push(brierChoice(a.choice!, outcomes[q.q_id] as string));
           const c = (consensus[q.q_id] ??= {}) as Record<string, number>;
           c[a.choice!] = (c[a.choice!] ?? 0) + weight;
+          const nb = (naive[q.q_id] ??= {}) as Record<string, number>;
+          nb[a.choice!] = (nb[a.choice!] ?? 0) + 1;
         }
       }
 
@@ -147,7 +165,7 @@ switch (cmd) {
       const prevDate = agent.last_scored_date as string | null;
       const dayBefore = new Date(new Date(wuDate + "T00:00:00Z").getTime() - 86400_000).toISOString().slice(0, 10);
       const streakAfter = prevDate === dayBefore || prevDate === wuDate ? agent.streak + (prevDate === wuDate ? 0 : 1) : 1;
-      const points = pointsFor(manifest.points.base, acc, agent.tier_index, streakAfter);
+      const points = Math.round(pointsFor(manifest.points.base, acc, agent.tier_index, streakAfter) * div);
 
       db.prepare(
         "INSERT OR REPLACE INTO scores (agent_id, workunit_id, brier, acc, skill_after, points, streak_after) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -158,7 +176,7 @@ switch (cmd) {
       db.prepare(
         "UPDATE agents SET skill = ?, points = points + ?, streak = ?, scored_count = scored_count + 1, last_scored_date = ? WHERE agent_id = ?",
       ).run(skillAfter, points, streakAfter, wuDate, r.agent_id);
-      console.log(`${r.agent_id}: brier=${brier.toFixed(4)} acc=${acc.toFixed(4)} skill=${skillAfter.toFixed(4)} +${points}pts streak=${streakAfter}`);
+      console.log(`${r.agent_id}: brier=${brier.toFixed(4)} acc=${acc.toFixed(4)} skill=${skillAfter.toFixed(4)} div=${div.toFixed(3)} +${points}pts streak=${streakAfter}`);
     }
 
     // Recompute tiers (percentile of skill among eligible agents)
@@ -171,18 +189,41 @@ switch (cmd) {
       db.prepare("UPDATE agents SET tier_index = ? WHERE agent_id = ?").run(tierIndexFor(pct, sc), a.agent_id);
     });
 
-    // Finalize consensus
+    // Finalize consensus. The diversity-weighted support per option feeds the
+    // cross-inhibition decision engine (the swarm's committed call); the plain
+    // weighted mean / vote tally are kept for calibration + board display.
     const consensusOut: Record<string, unknown> = {};
     for (const q of questions) {
       const c = consensus[q.q_id];
       if (!c) continue;
       if (q.type === "binary") {
         const { num, den } = c as { num: number; den: number };
-        consensusOut[q.q_id] = { p: den > 0 ? num / den : null, outcome: outcomes[q.q_id] };
+        const decision = crossInhibitionConsensus([
+          { id: "yes", support: num },
+          { id: "no", support: Math.max(0, den - num) },
+        ]);
+        const nb = naive[q.q_id] as { num: number; den: number } | undefined;
+        consensusOut[q.q_id] = {
+          p: den > 0 ? num / den : null,
+          naive: nb && nb.den > 0 ? nb.num / nb.den : null, // raw unweighted mean
+          decision: decision.committed ? (decision.choice === "yes" ? 1 : 0) : null,
+          confidence: Number(decision.confidence.toFixed(4)),
+          outcome: outcomes[q.q_id],
+        };
       } else {
         const votes = c as Record<string, number>;
+        const decision = crossInhibitionConsensus(Object.entries(votes).map(([id, support]) => ({ id, support })));
         const top = Object.entries(votes).sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
-        consensusOut[q.q_id] = { choice: top, votes, outcome: outcomes[q.q_id] };
+        const nb = naive[q.q_id] as Record<string, number> | undefined;
+        const naiveTop = nb ? (Object.entries(nb).sort((x, y) => y[1] - x[1])[0]?.[0] ?? null) : null;
+        consensusOut[q.q_id] = {
+          choice: decision.choice ?? top,
+          votes,
+          naive: naiveTop, // raw unweighted plurality
+          decision: decision.committed ? decision.choice : null,
+          confidence: Number(decision.confidence.toFixed(4)),
+          outcome: outcomes[q.q_id],
+        };
       }
     }
     db.prepare("UPDATE workunits SET consensus_json = ?, status = 'scored' WHERE workunit_id = ?").run(

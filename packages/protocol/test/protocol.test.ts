@@ -16,6 +16,11 @@ import {
   pointsFor,
   consensusWeight,
   tierIndexFor,
+  answerDistance,
+  diversityMultipliers,
+  crossInhibitionConsensus,
+  type Answer,
+  type Question,
 } from "../src/index.ts";
 
 test("jcs: sorts keys recursively, no whitespace", () => {
@@ -88,4 +93,70 @@ test("scoring: golden values", () => {
 test("scoring: brier rejects out-of-range probability", () => {
   assert.throws(() => brierBinary(1.2, 1));
   assert.throws(() => brierBinary(-0.1, 0));
+});
+
+test("diversity: answer distance (binary + choice)", () => {
+  const qs: Question[] = [
+    { q_id: "a", type: "binary", text: "", resolution: { source: "x", rule: "y", resolve_at: "z" } },
+    { q_id: "b", type: "choice", text: "", choices: ["X", "Y"], resolution: { source: "x", rule: "y", resolve_at: "z" } },
+  ];
+  const mk = (p: number, c: string): Answer[] => [
+    { q_id: "a", p, rationale: "" },
+    { q_id: "b", choice: c, rationale: "" },
+  ];
+  assert.equal(answerDistance(mk(0.8, "X"), mk(0.8, "X"), qs), 0); // identical
+  // |0.8-0.6|=0.2 on a, choice differs=1 on b → mean 0.6
+  assert.ok(Math.abs(answerDistance(mk(0.8, "X"), mk(0.6, "Y"), qs) - 0.6) < 1e-12);
+  // missing answer = maximally distant
+  assert.equal(answerDistance([{ q_id: "a", p: 0.8, rationale: "" }], mk(0.8, "X"), qs), 0.5);
+});
+
+test("diversity: clusters split weight, lone voices keep it", () => {
+  const qs: Question[] = [
+    { q_id: "a", type: "binary", text: "", resolution: { source: "x", rule: "y", resolve_at: "z" } },
+  ];
+  const sub = (id: string, p: number) => ({ agent_id: id, answers: [{ q_id: "a", p, rationale: "" }] });
+  // three identical sybils + one distinct voice
+  const m = diversityMultipliers(
+    [sub("s1", 0.9), sub("s2", 0.9), sub("s3", 0.9), sub("lone", 0.1)],
+    qs,
+  );
+  assert.ok(Math.abs(m.get("s1")! - 1 / 3) < 1e-12);
+  assert.ok(Math.abs(m.get("s2")! - 1 / 3) < 1e-12);
+  assert.ok(Math.abs(m.get("s3")! - 1 / 3) < 1e-12);
+  assert.equal(m.get("lone"), 1);
+
+  // within-epsilon herders merge; clearly-different stay separate
+  const m2 = diversityMultipliers([sub("h1", 0.90), sub("h2", 0.93), sub("indep", 0.40)], qs);
+  assert.ok(Math.abs(m2.get("h1")! - 0.5) < 1e-12); // 0.03 <= epsilon → paired
+  assert.ok(Math.abs(m2.get("h2")! - 0.5) < 1e-12);
+  assert.equal(m2.get("indep"), 1);
+});
+
+test("consensus: commits to a clear winner with high confidence", () => {
+  const r = crossInhibitionConsensus([{ id: "A", support: 10 }, { id: "B", support: 2 }]);
+  assert.equal(r.choice, "A");
+  assert.ok(r.committed);
+  assert.ok(r.confidence > 0.6); // well past the quorum threshold
+});
+
+test("consensus: picks the stronger side and sharpens a near-tie", () => {
+  const r = crossInhibitionConsensus([{ id: "A", support: 11 }, { id: "B", support: 9 }]);
+  assert.equal(r.choice, "A");
+  assert.ok(r.distribution.A > r.distribution.B);
+  // cross-inhibition amplifies the lead beyond the raw 11/20 = 0.55 input share
+  const shareA = r.distribution.A / (r.distribution.A + r.distribution.B);
+  assert.ok(shareA > 0.55);
+});
+
+test("consensus: abstains (no commit) on a perfect deadlock", () => {
+  const r = crossInhibitionConsensus([{ id: "A", support: 5 }, { id: "B", support: 5 }]);
+  assert.ok(!r.committed);
+});
+
+test("consensus: defensive on empty and zero/NaN support", () => {
+  assert.equal(crossInhibitionConsensus([]).choice, null);
+  const z = crossInhibitionConsensus([{ id: "A", support: 0 }, { id: "B", support: NaN }]);
+  assert.ok(!z.committed);
+  assert.equal(z.confidence, 0);
 });

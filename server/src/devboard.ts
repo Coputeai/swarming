@@ -3,7 +3,12 @@
 
 import type { FastifyInstance } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { TIER_NAMES } from "../../packages/protocol/src/index.ts";
+
+const DELIB_FILE = join(dirname(fileURLToPath(import.meta.url)), "..", "data", "deliberation-latest.json");
 
 export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
   app.get("/v1/leaderboard", async () => {
@@ -46,6 +51,11 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
     };
   });
 
+  app.get("/v1/deliberation/latest", async () => {
+    if (!existsSync(DELIB_FILE)) return { workunit_id: null };
+    try { return JSON.parse(readFileSync(DELIB_FILE, "utf8")); } catch { return { workunit_id: null }; }
+  });
+
   app.get("/", async (_req, reply) => reply.type("text/html").send(HTML));
 }
 
@@ -71,8 +81,10 @@ const HTML = `<!doctype html>
 <table id="lb"><tr><th>agent</th><th>model</th><th>tier</th><th class="num">skill</th><th class="num">points</th><th class="num">streak</th></tr></table>
 <h2>open slate <span class="dim">(operator view — answers are blind to agents until close)</span> <span class="dim" id="openwu"></span></h2>
 <table id="open"></table>
-<h2>latest consensus <span class="dim" id="wu"></span></h2>
-<table id="cons"><tr><th>question</th><th class="num">swarm says</th><th class="num">outcome</th></tr></table>
+<h2>deliberation <span class="dim">&mdash; watch the swarm converge over rounds</span> <span class="dim" id="delibwu"></span></h2>
+<table id="delib"></table>
+<h2>latest consensus <span class="dim">&mdash; plain majority vote vs. the swarm's cross-inhibition decision</span> <span class="dim" id="wu"></span></h2>
+<table id="cons"></table>
 <footer>refreshes every 2s &middot; every number reproducible from logs</footer>
 <script>
 async function j(u){return (await fetch(u)).json()}
@@ -96,15 +108,45 @@ async function tick(){
       }
       document.getElementById('open').innerHTML=h;
     } else { document.getElementById('open').innerHTML=''; document.getElementById('openwu').textContent='(none)'; }
+    const dl=await j('/v1/deliberation/latest');
+    if(dl.workunit_id){
+      document.getElementById('delibwu').textContent=dl.rounds+' rounds · '+dl.agents.map(a=>a.name+' ('+a.model_class+')').join(', ');
+      let h='<tr><th>question</th><th>convergence (swarm leaning by round)</th><th class="num">swarm decision</th></tr>';
+      for(const q of dl.questions){
+        let conv;
+        if(q.type==='binary'){
+          conv=q.trace.map(t=>'R'+t.round+' '+(t.yes==null?'?':Math.round(t.yes*100)+'%')).join(' &rarr; ');
+        } else {
+          conv=q.trace.map(t=>{const top=(t.top&&t.top[0])?t.top[0]:null;return 'R'+t.round+' '+(top?top[0]+' '+Math.round(top[1]*100)+'%':'?');}).join(' &rarr; ');
+        }
+        const f=q.final||{};
+        const dec=q.type==='binary'?(f.decision===1?'Yes':(f.decision===0?'No':'—')):(f.decision||'—');
+        const call=dec+' ('+Math.round((f.confidence||0)*100)+'%)'+(f.committed?'':' <span class=dim>[plurality]</span>');
+        const votes=(q.votes||[]).map(v=>v.name+': '+v.vote).join(' · ');
+        h+='<tr><td>'+q.text+'<br><span class="dim" style="font-size:.8rem">'+votes+'</span></td><td class="dim">'+conv+'</td><td class="num">'+call+'</td></tr>';
+      }
+      document.getElementById('delib').innerHTML=h;
+    } else { document.getElementById('delib').innerHTML=''; document.getElementById('delibwu').textContent='(none)'; }
     const c=await j('/v1/consensus/latest');
     if(c.workunit_id){
       document.getElementById('wu').textContent=c.workunit_id;
-      document.getElementById('cons').innerHTML='<tr><th>question</th><th class="num">swarm says</th><th class="num">outcome</th></tr>'+
-        Object.entries(c.consensus).map(([q,v])=>{
-          const said=v.p!==undefined?(v.p===null?'?':yn(v.p)):v.choice;
-          const hit=v.p!==undefined?((v.p>=0.5)===(v.outcome===1)):(v.choice===v.outcome);
-          return '<tr><td>'+(c.questions[q]||q)+'</td><td class="num">'+said+'</td><td class="num '+(hit?'ok':'bad')+'">'+v.outcome+(hit?' &#x2713;':' &#x2717;')+'</td></tr>';
-        }).join('');
+      const mark=h=>h==null?'':(h?' &#x2713;':' &#x2717;');
+      const cls=h=>h==null?'dim':(h?'ok':'bad');
+      let rows='<tr><th>question</th><th class="num">majority vote</th><th class="num">swarm (cross-inhibition)</th><th class="num">outcome</th></tr>';
+      for(const [q,v] of Object.entries(c.consensus)){
+        const binary=v.p!==undefined;
+        const naiveCall=binary?(v.naive==null?'?':yn(v.naive)):(v.naive==null?'?':v.naive);
+        const naiveHit=binary?(v.naive!=null&&((v.naive>=0.5)===(v.outcome===1))):(v.naive==null?null:(v.naive===v.outcome));
+        let swarmCall,swarmHit;
+        if(v.decision==null){swarmCall='abstain';swarmHit=null;}
+        else if(binary){swarmCall=(v.decision===1?'Yes':'No')+' ('+Math.round(v.confidence*100)+'%)';swarmHit=(v.decision===v.outcome);}
+        else {swarmCall=v.decision+' ('+Math.round(v.confidence*100)+'%)';swarmHit=(v.decision===v.outcome);}
+        rows+='<tr><td>'+(c.questions[q]||q)+'</td>'
+          +'<td class="num '+cls(naiveHit)+'">'+naiveCall+mark(naiveHit)+'</td>'
+          +'<td class="num '+cls(swarmHit)+'">'+swarmCall+mark(swarmHit)+'</td>'
+          +'<td class="num">'+v.outcome+'</td></tr>';
+      }
+      document.getElementById('cons').innerHTML=rows;
     }
   }catch(e){}
 }
