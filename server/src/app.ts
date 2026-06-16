@@ -141,9 +141,10 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
 
   app.get("/v1/work", async (req, reply) => {
     const agentId = String((req.query as Record<string, unknown>).agent_id ?? "");
-    if (!db.prepare("SELECT 1 FROM agents WHERE agent_id = ?").get(agentId)) {
-      return err(reply, 404, "UNKNOWN_AGENT", "agent not registered");
-    }
+    const agentRow = db.prepare("SELECT capabilities_json FROM agents WHERE agent_id = ?").get(agentId) as
+      | { capabilities_json: string } | undefined;
+    if (!agentRow) return err(reply, 404, "UNKNOWN_AGENT", "agent not registered");
+    const agentCaps = new Set(JSON.parse(agentRow.capabilities_json) as string[]);
     const now = new Date().toISOString();
     const rows = db.prepare(
       `SELECT w.* FROM workunits w
@@ -152,10 +153,15 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
     ).all(agentId, now) as Record<string, string>[];
     logEvent(db, "work_pulled", { ip: req.ip, agent_id: agentId, payload: { n: rows.length } });
 
-    const tasks: Task[] = rows.map((w) => {
+    const tasks: Task[] = [];
+    for (const w of rows) {
       const manifest = getManifest(db, w.mission_id)!;
+      // capability gate (the skill interface): an agent only receives work whose
+      // mission requires capabilities it has declared. New skills/missions become
+      // available simply by agents advertising the matching capability.
+      if (!(manifest.capabilities ?? []).every((c) => agentCaps.has(c))) continue;
       const submitted = Boolean(db.prepare("SELECT 1 FROM results WHERE agent_id = ? AND workunit_id = ?").get(agentId, w.workunit_id));
-      return {
+      tasks.push({
         task_id: `t_${w.workunit_id}`,
         mission_id: w.mission_id,
         workunit_id: w.workunit_id,
@@ -166,8 +172,8 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
         deadline: w.closes_at,
         points_base: manifest.points.base,
         already_submitted: submitted,
-      };
-    });
+      });
+    }
     return { tasks };
   });
 
