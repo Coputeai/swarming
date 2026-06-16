@@ -96,9 +96,27 @@ switch (cmd) {
     const fileArg = args.find((a) => !a.startsWith("--") && a !== args[0]);
     const auto = args.includes("--auto");
     const workunitId = args[0];
-    const wu = db.prepare("SELECT payload_json, published_at, closes_at FROM workunits WHERE workunit_id = ?").get(workunitId) as
-      | { payload_json: string; published_at: string; closes_at: string } | undefined;
+    const wu = db.prepare(
+      "SELECT payload_json, published_at, closes_at, status, rounds, current_round FROM workunits WHERE workunit_id = ?",
+    ).get(workunitId) as
+      | { payload_json: string; published_at: string; closes_at: string;
+          status: string; rounds: number; current_round: number }
+      | undefined;
     if (!wu) throw new Error(`unknown workunit ${workunitId}`);
+
+    // For multi-round deliberation: the server sets status='resolving' after the
+    // final round closes; that is the expected state when an operator resolves.
+    // Warn (but continue) if rounds haven't all completed yet.
+    const wuRounds = Number(wu.rounds ?? 1);
+    const wuCurrentRound = Number(wu.current_round ?? 1);
+    if (wuRounds > 1) {
+      if (wu.status === "resolving") {
+        console.log(`deliberation complete (${wuRounds} rounds finished) — applying manual outcomes`);
+      } else if (wu.status === "open" && wuCurrentRound <= wuRounds) {
+        console.warn(`warning: deliberation is on round ${wuCurrentRound}/${wuRounds} — resolving before all rounds finish`);
+      }
+    }
+
     const questions = (JSON.parse(wu.payload_json) as { questions: Question[] }).questions;
 
     const outcomes: Record<string, number | string> = fileArg
@@ -134,8 +152,12 @@ switch (cmd) {
     if (wu.status !== "resolved") throw new Error(`workunit is '${wu.status}', expected resolved`);
     const wuRounds = Number(wu.rounds ?? 1);
     const wuCurrentRound = Number(wu.current_round ?? 1);
-    if (wuRounds > 1 && wuCurrentRound <= wuRounds) {
-      console.warn(`warning: deliberation has only completed ${wuCurrentRound - 1} of ${wuRounds} rounds — scoring partial results`);
+    if (wuRounds > 1) {
+      if (wuCurrentRound <= wuRounds) {
+        console.warn(`warning: deliberation has only completed ${wuCurrentRound - 1} of ${wuRounds} rounds — scoring partial results`);
+      } else {
+        console.log(`scoring final-round answers (${wuRounds}-round deliberation)`);
+      }
     }
     const manifest = getManifest(db, wu.mission_id)!;
     const questions = (JSON.parse(wu.payload_json) as { questions: Question[] }).questions;
