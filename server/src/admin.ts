@@ -1,11 +1,17 @@
 // Operator CLI — runs locally on the server box over SSH; no admin HTTP
 // endpoints exist (BLUEPRINT §5.4). Usage:
 //   node src/admin.ts sync-missions
-//   node src/admin.ts publish <mission_id> <input.json> [closesAtISO]
+//   node src/admin.ts publish <mission_id> <input.json> [closesAtISO] [--rounds=N] [--round-hours=H]
 //   node src/admin.ts close <workunit_id>          (force-close, for testing)
 //   node src/admin.ts resolve <workunit_id> <outcomes.json>
 //   node src/admin.ts score <workunit_id>
 //   node src/admin.ts report
+//
+// Multi-round deliberation workflow:
+//   publish ... --rounds=3 --round-hours=2  (3 rounds, 2 h each)
+//   (agents answer via GET /v1/work + POST /v1/results; server auto-advances rounds)
+//   resolve <workunit_id> outcomes.json     (supply ground truth after all rounds)
+//   score   <workunit_id>                   (score final-round answers)
 
 import { readFileSync } from "node:fs";
 import { openDb } from "./db.ts";
@@ -41,7 +47,13 @@ switch (cmd) {
   }
 
   case "publish": {
-    const [missionId, inputFile, closesAt] = args;
+    const posArgs = args.filter((a) => !a.startsWith("--"));
+    const [missionId, inputFile, closesAt] = posArgs;
+    const roundsArg = args.find((a) => a.startsWith("--rounds="));
+    const rounds = roundsArg ? Math.max(1, parseInt(roundsArg.split("=")[1], 10)) : 1;
+    const roundHoursArg = args.find((a) => a.startsWith("--round-hours="));
+    const roundHours = roundHoursArg ? parseFloat(roundHoursArg.split("=")[1]) : null;
+
     const manifest = getManifest(db, missionId);
     if (!manifest) throw new Error(`unknown mission ${missionId} (run sync-missions first)`);
     const generator = GENERATORS[manifest.generator];
@@ -53,11 +65,21 @@ switch (cmd) {
       workunitId = `wu_${missionId}_${date}-${n++}`;
     }
     const closes = closesAt ?? isoPlusHours(manifest.window_hours);
+    const now = new Date().toISOString();
+    const perRoundHours = roundHours ?? (rounds > 1 ? manifest.window_hours / rounds : null);
+    const roundClosesAt = rounds > 1 && perRoundHours ? isoPlusHours(perRoundHours) : null;
     db.prepare(
-      `INSERT INTO workunits (workunit_id, mission_id, payload_json, published_at, closes_at, resolve_at, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'open')`,
-    ).run(workunitId, missionId, JSON.stringify(payload), new Date().toISOString(), closes, closes);
-    console.log(`published ${workunitId} (closes ${closes})`);
+      `INSERT INTO workunits
+         (workunit_id, mission_id, payload_json, published_at, closes_at, resolve_at, status,
+          rounds, current_round, round_started_at, round_closes_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'open', ?, 1, ?, ?)`,
+    ).run(workunitId, missionId, JSON.stringify(payload), now, closes, closes,
+          rounds, now, roundClosesAt);
+    if (rounds > 1) {
+      console.log(`published ${workunitId} (${rounds} rounds, round 1 closes ${roundClosesAt ?? "no deadline"})`);
+    } else {
+      console.log(`published ${workunitId} (closes ${closes})`);
+    }
     break;
   }
 
@@ -107,9 +129,14 @@ switch (cmd) {
 
   case "score": {
     const [workunitId] = args;
-    const wu = db.prepare("SELECT * FROM workunits WHERE workunit_id = ?").get(workunitId) as Record<string, string> | undefined;
+    const wu = db.prepare("SELECT * FROM workunits WHERE workunit_id = ?").get(workunitId) as Record<string, string | number> | undefined;
     if (!wu) throw new Error(`unknown workunit ${workunitId}`);
     if (wu.status !== "resolved") throw new Error(`workunit is '${wu.status}', expected resolved`);
+    const wuRounds = Number(wu.rounds ?? 1);
+    const wuCurrentRound = Number(wu.current_round ?? 1);
+    if (wuRounds > 1 && wuCurrentRound <= wuRounds) {
+      console.warn(`warning: deliberation has only completed ${wuCurrentRound - 1} of ${wuRounds} rounds — scoring partial results`);
+    }
     const manifest = getManifest(db, wu.mission_id)!;
     const questions = (JSON.parse(wu.payload_json) as { questions: Question[] }).questions;
     const outcomes = JSON.parse(wu.outcome_json!) as Record<string, number | string>;
@@ -246,6 +273,7 @@ switch (cmd) {
 
   default:
     console.error("usage: admin.ts <sync-missions|publish|close|resolve [file] [--auto]|score|report> ...");
+    console.error("  publish flags: --rounds=N  --round-hours=H");
     process.exit(1);
 }
 

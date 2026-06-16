@@ -128,6 +128,116 @@ export function diversityMultipliers(
   return out;
 }
 
+// --- Deliberation round helpers -----------------------------------------------
+// Pure functions consumed by both the server (round advancement) and tests.
+
+export type RoundAggregate = Record<
+  string,
+  { yes: number | null } | { top: [string, number][] }
+>;
+
+/**
+ * Diversity-weighted interim aggregate of one deliberation round.
+ * Binary: weighted mean p(yes). Choice: weighted vote share (top 5).
+ */
+export function interimRoundAggregate(
+  submissions: AgentSubmission[],
+  questions: Question[],
+): RoundAggregate {
+  if (submissions.length === 0) return {};
+  const div = diversityMultipliers(submissions, questions);
+  const out: RoundAggregate = {};
+  for (const q of questions) {
+    if (q.type === "binary") {
+      let num = 0, den = 0;
+      for (const s of submissions) {
+        const a = s.answers.find((x) => x.q_id === q.q_id);
+        if (!a || a.p == null) continue;
+        const w = div.get(s.agent_id) ?? 1;
+        num += w * a.p;
+        den += w;
+      }
+      out[q.q_id] = { yes: den > 0 ? num / den : null };
+    } else {
+      const votes: Record<string, number> = {};
+      for (const s of submissions) {
+        const a = s.answers.find((x) => x.q_id === q.q_id);
+        if (!a || !a.choice) continue;
+        const w = div.get(s.agent_id) ?? 1;
+        votes[a.choice] = (votes[a.choice] ?? 0) + w;
+      }
+      const tot = Object.values(votes).reduce((x, y) => x + y, 0) || 1;
+      out[q.q_id] = {
+        top: Object.entries(votes)
+          .sort((x, y) => y[1] - x[1])
+          .slice(0, 5)
+          .map(([c, w]) => [c, w / tot] as [string, number]),
+      };
+    }
+  }
+  return out;
+}
+
+export interface RoundConsensusEntry {
+  decision: number | string | null;
+  confidence: number;
+  committed: boolean;
+  p?: number | null;
+  votes?: Record<string, number>;
+}
+
+/**
+ * Cross-inhibition consensus from the final deliberation round answers.
+ * Identical math to the score pipeline in admin.ts but operating on raw
+ * submissions rather than stored results — used by the server to compute
+ * and store consensus_json when the last round closes.
+ */
+export function finalRoundConsensus(
+  submissions: AgentSubmission[],
+  questions: Question[],
+): Record<string, RoundConsensusEntry> {
+  if (submissions.length === 0) return {};
+  const div = diversityMultipliers(submissions, questions);
+  const out: Record<string, RoundConsensusEntry> = {};
+  for (const q of questions) {
+    if (q.type === "binary") {
+      let yes = 0, no = 0;
+      for (const s of submissions) {
+        const a = s.answers.find((x) => x.q_id === q.q_id);
+        if (!a || a.p == null) continue;
+        const w = div.get(s.agent_id) ?? 1;
+        yes += w * a.p;
+        no += w * (1 - a.p);
+      }
+      const c = crossInhibitionConsensus([{ id: "yes", support: yes }, { id: "no", support: no }]);
+      const tot = yes + no || 1;
+      out[q.q_id] = {
+        decision: c.committed ? (c.choice === "yes" ? 1 : 0) : (yes >= no ? 1 : 0),
+        confidence: Number(c.confidence.toFixed(4)),
+        committed: c.committed,
+        p: yes / tot,
+      };
+    } else {
+      const votes: Record<string, number> = {};
+      for (const s of submissions) {
+        const a = s.answers.find((x) => x.q_id === q.q_id);
+        if (!a || !a.choice) continue;
+        const w = div.get(s.agent_id) ?? 1;
+        votes[a.choice] = (votes[a.choice] ?? 0) + w;
+      }
+      const entries = Object.entries(votes).sort((x, y) => y[1] - x[1]);
+      const c = crossInhibitionConsensus(entries.map(([id, support]) => ({ id, support })));
+      out[q.q_id] = {
+        decision: c.committed ? c.choice : (entries[0]?.[0] ?? null),
+        confidence: Number(c.confidence.toFixed(4)),
+        committed: c.committed,
+        votes,
+      };
+    }
+  }
+  return out;
+}
+
 // --- Cross-inhibition consensus (the swarm's decision engine) ----------------
 // The honeybee/neural value-sensitive collective-decision mechanism: each
 // candidate option recruits support in proportion to its value, sends a
