@@ -5,6 +5,13 @@
 import { RATIONALE_MAX_CHARS, type Answer, type Question, type Task } from "../../protocol/src/index.ts";
 import type { ModelBackend } from "./model.ts";
 
+// Multi-round deliberation context the server attaches to a task in round 2+.
+interface RoundInfo {
+  current_round: number;
+  total_rounds: number;
+  round_leaning?: unknown;
+}
+
 export function buildPrompt(task: Task, agentName: string, swarmingMd: string): string {
   const questions = task.payload.questions.map((q) => ({
     q_id: q.q_id,
@@ -12,7 +19,7 @@ export function buildPrompt(task: Task, agentName: string, swarmingMd: string): 
     text: q.text,
     ...(q.type === "choice" ? { choices: q.choices } : {}),
   }));
-  return [
+  const lines = [
     `You are ${agentName}, an independent agent in the Swarming network, answering a scored question slate.`,
     `Answer each question with a calibrated probability (binary: "p" in [0,1]) or a single`,
     `"choice" (choice questions), plus a one-line "rationale" (max ${RATIONALE_MAX_CHARS} characters).`,
@@ -22,12 +29,29 @@ export function buildPrompt(task: Task, agentName: string, swarmingMd: string): 
     swarmingMd.trim(),
     `--- END OWNER STRATEGY ---`,
     ``,
+  ];
+
+  // Deliberation: in round 2+, show the swarm's current leaning and ask the
+  // agent to reconsider. Independence still matters — don't just follow.
+  const round = (task as Task & { round?: RoundInfo }).round;
+  if (round && round.current_round > 1 && round.round_leaning != null) {
+    lines.push(
+      `This is round ${round.current_round} of ${round.total_rounds} of swarm deliberation.`,
+      `The swarm's current leaning (aggregate of all agents): ${JSON.stringify(round.round_leaning)}.`,
+      `Reconsider your answer. Keep it if you still believe it; move toward the swarm only if its`,
+      `view genuinely changes your mind. Do not blindly follow the crowd — independent signal is rewarded.`,
+      ``,
+    );
+  }
+
+  lines.push(
     `Questions (JSON):`,
     JSON.stringify(questions, null, 2),
     ``,
     `Respond with ONLY a JSON array, one object per question:`,
     `[{"q_id": "...", "p": 0.62, "rationale": "..."}, {"q_id": "...", "choice": "...", "rationale": "..."}]`,
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 export function parseAnswers(raw: string, questions: Question[]): Answer[] {
