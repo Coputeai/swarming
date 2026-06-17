@@ -134,6 +134,32 @@ switch (cmd) {
       }
     }
 
+    // Quorum verification: no external oracle — the canonical answer is the
+    // swarm's own diversity-weighted consensus (cross-inhibition), and agents
+    // are then scored on agreement with it.
+    if (args.includes("--quorum")) {
+      const results = db.prepare("SELECT agent_id, payload_json FROM results WHERE workunit_id = ?").all(workunitId) as
+        { agent_id: string; payload_json: string }[];
+      const subs = results.map((r) => ({ agent_id: r.agent_id, answers: (JSON.parse(r.payload_json) as { answers: Answer[] }).answers }));
+      const div = diversityMultipliers(subs, questions);
+      for (const q of questions) {
+        if (q.q_id in outcomes) continue;
+        if (q.type === "binary") {
+          let yes = 0, no = 0;
+          for (const s of subs) { const a = s.answers.find((x) => x.q_id === q.q_id); if (!a || a.p == null) continue; const w = div.get(s.agent_id) ?? 1; yes += w * a.p; no += w * (1 - a.p); }
+          const c = crossInhibitionConsensus([{ id: "yes", support: yes }, { id: "no", support: no }]);
+          outcomes[q.q_id] = c.committed ? (c.choice === "yes" ? 1 : 0) : (yes >= no ? 1 : 0);
+        } else {
+          const votes: Record<string, number> = {};
+          for (const s of subs) { const a = s.answers.find((x) => x.q_id === q.q_id); if (!a || !a.choice) continue; const w = div.get(s.agent_id) ?? 1; votes[a.choice] = (votes[a.choice] ?? 0) + w; }
+          const entries = Object.entries(votes).sort((x, y) => y[1] - x[1]);
+          const c = crossInhibitionConsensus(entries.map(([id, support]) => ({ id, support })));
+          outcomes[q.q_id] = c.committed ? (c.choice as string) : (entries[0]?.[0] ?? "");
+        }
+        console.log(`quorum-resolved ${q.q_id} = ${outcomes[q.q_id]} (swarm canonical)`);
+      }
+    }
+
     const missing = questions.filter((q) => !(q.q_id in outcomes)).map((q) => q.q_id);
     if (missing.length > 0) {
       throw new Error(`unresolved questions: ${missing.join(", ")} — supply an outcomes file for these`);

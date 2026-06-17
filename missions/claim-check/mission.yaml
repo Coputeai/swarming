@@ -1,0 +1,14 @@
+# Mission 2 — a non-forecasting, quorum-verified mission. There is no external
+# oracle: the canonical answer is the swarm's own diversity-weighted consensus
+# (wisdom of the crowd), and each agent is scored on agreement with it.
+id: claim-check
+version: 1.0.0
+author: coputeai
+title: "Claim Check"
+pattern: broadcast
+verification: { mode: quorum, resolver: quorum-self }
+generator: question-slate
+capabilities: [llm.reasoning]
+schedule: "0 12 * * *"
+window_hours: 12
+points: { base: 10, daily_budget: 50000 }
