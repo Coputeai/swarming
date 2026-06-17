@@ -21,6 +21,37 @@ const SOURCE_HANDLERS: { match: RegExp; fetch: (id: string) => Promise<string | 
       return p == null ? null : `${id} current price: $${p}`;
     },
   },
+  {
+    // wiki:<Page_Title> -> the page's summary extract (live encyclopedic context)
+    match: /^wiki:(.+)$/,
+    fetch: async (title) => {
+      const r = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`, {
+        signal: AbortSignal.timeout(6000),
+        headers: { accept: "application/json" },
+      });
+      if (!r.ok) return null;
+      const j = (await r.json()) as { extract?: string };
+      const x = (j.extract ?? "").trim();
+      return x ? x.slice(0, 600) : null;
+    },
+  },
+  {
+    // wc:<A-L> -> live 2026 FIFA World Cup group standings from ESPN's public API (no key)
+    match: /^wc:([A-La-l])$/,
+    fetch: async (letter) => {
+      const r = await fetch("https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings", { signal: AbortSignal.timeout(7000) });
+      if (!r.ok) return null;
+      const j = (await r.json()) as { children?: { name?: string; standings?: { entries?: { team?: { displayName?: string }; stats?: { name: string; displayValue: string }[] }[] } }[] };
+      const g = (j.children ?? []).find((c) => (c.name ?? "").toUpperCase() === `GROUP ${letter.toUpperCase()}`);
+      const entries = g?.standings?.entries ?? [];
+      if (entries.length === 0) return null;
+      const rows = entries.map((e) => {
+        const st = Object.fromEntries((e.stats ?? []).map((x) => [x.name, x.displayValue]));
+        return `${st.rank ?? "?"}. ${e.team?.displayName ?? "?"} ${st.points ?? "0"}pts (${st.overall ?? ""})`;
+      });
+      return `${g?.name} live standings — ${rows.join("; ")}`;
+    },
+  },
 ];
 
 /**

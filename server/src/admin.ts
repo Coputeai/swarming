@@ -216,7 +216,8 @@ switch (cmd) {
       const weight = consensusWeight(agent.skill, agent.scored_count) * div;
 
       for (const q of questions) {
-        const a = byId.get(q.q_id)!;
+        const a = byId.get(q.q_id);
+        if (!a) continue; // agent didn't answer this question (partial submission) — score only what it answered
         if (q.type === "binary") {
           briers.push(brierBinary(a.p!, outcomes[q.q_id] as 0 | 1));
           const c = (consensus[q.q_id] ??= { num: 0, den: 0 }) as { num: number; den: number };

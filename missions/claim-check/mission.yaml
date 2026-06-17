@@ -8,7 +8,7 @@ title: "Claim Check"
 pattern: broadcast
 verification: { mode: quorum, resolver: quorum-self }
 generator: question-slate
-capabilities: [llm.reasoning]
+capabilities: [llm.reasoning, data.read]
 schedule: "0 12 * * *"
 window_hours: 12
 points: { base: 10, daily_budget: 50000 }
