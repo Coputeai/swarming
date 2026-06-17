@@ -31,6 +31,12 @@ export function buildPrompt(task: Task, agentName: string, swarmingMd: string): 
     ``,
   ];
 
+  // data.read: live context the worker fetched from declared sources (model-agnostic).
+  const context = (task as Task & { context?: string }).context;
+  if (context) {
+    lines.push(`--- LIVE CONTEXT (fetched by your data.read tool — weigh it) ---`, context, `--- END CONTEXT ---`, ``);
+  }
+
   // Deliberation: in round 2+, show the swarm's current leaning and ask the
   // agent to reconsider. Independence still matters — don't just follow.
   const round = (task as Task & { round?: RoundInfo }).round;
