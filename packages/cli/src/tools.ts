@@ -52,6 +52,22 @@ const SOURCE_HANDLERS: { match: RegExp; fetch: (id: string) => Promise<string | 
       return `${g?.name} live standings — ${rows.join("; ")}`;
     },
   },
+  {
+    // wc:all -> live current leader of every 2026 World Cup group (ESPN, no key)
+    match: /^wc:all$/,
+    fetch: async () => {
+      const r = await fetch("https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings", { signal: AbortSignal.timeout(7000) });
+      if (!r.ok) return null;
+      const j = (await r.json()) as { children?: { name?: string; standings?: { entries?: { team?: { displayName?: string }; stats?: { name: string; displayValue: string }[] }[] } }[] };
+      const leaders = (j.children ?? []).map((g) => {
+        const top = (g.standings?.entries ?? [])
+          .map((e) => ({ name: e.team?.displayName, st: Object.fromEntries((e.stats ?? []).map((x) => [x.name, x.displayValue])) }))
+          .sort((a, b) => Number(a.st.rank ?? 9) - Number(b.st.rank ?? 9))[0];
+        return top ? `${g.name}: ${top.name} (${top.st.points ?? "0"}pts)` : null;
+      }).filter(Boolean);
+      return leaders.length ? "Live group leaders — " + leaders.join("; ") : null;
+    },
+  },
 ];
 
 /**
