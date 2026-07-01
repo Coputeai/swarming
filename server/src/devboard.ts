@@ -3,6 +3,55 @@
 
 import type { FastifyInstance } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
+import {
+  diversityMultipliers,
+  crossInhibitionConsensus,
+  consensusWeight,
+  type Answer,
+  type Question,
+} from "../../packages/protocol/src/index.ts";
+
+// Live consensus for an OPEN (not-yet-scored) slate: the swarm's current
+// committed call, computed with the same diversity-weighted cross-inhibition
+// engine the scorer uses — just without a ground-truth outcome. Lets the board
+// show what the swarm thinks right now, before any match resolves.
+function liveConsensus(
+  questions: Question[],
+  subs: { agent_id: string; skill: number; scored_count: number; answers: Answer[] }[],
+): Record<string, unknown> {
+  const diversity = diversityMultipliers(
+    subs.map((s) => ({ agent_id: s.agent_id, answers: s.answers })),
+    questions,
+  );
+  const out: Record<string, unknown> = {};
+  for (const q of questions) {
+    if (q.type === "binary") {
+      let yes = 0, den = 0;
+      for (const s of subs) {
+        const a = s.answers.find((x) => x.q_id === q.q_id);
+        if (!a || a.p == null) continue;
+        const w = consensusWeight(s.skill, s.scored_count) * (diversity.get(s.agent_id) ?? 1);
+        yes += w * a.p; den += w;
+      }
+      if (den === 0) continue;
+      const d = crossInhibitionConsensus([{ id: "yes", support: yes }, { id: "no", support: Math.max(0, den - yes) }]);
+      out[q.q_id] = { p: yes / den, decision: d.committed ? (d.choice === "yes" ? 1 : 0) : null, confidence: Number(d.confidence.toFixed(4)), live: true };
+    } else {
+      const votes: Record<string, number> = {};
+      for (const s of subs) {
+        const a = s.answers.find((x) => x.q_id === q.q_id);
+        if (!a || !a.choice) continue;
+        const w = consensusWeight(s.skill, s.scored_count) * (diversity.get(s.agent_id) ?? 1);
+        votes[a.choice] = (votes[a.choice] ?? 0) + w;
+      }
+      const entries = Object.entries(votes).sort((x, y) => y[1] - x[1]);
+      if (entries.length === 0) continue;
+      const d = crossInhibitionConsensus(entries.map(([id, support]) => ({ id, support })));
+      out[q.q_id] = { choice: d.choice ?? entries[0][0], votes, decision: d.committed ? d.choice : null, confidence: Number(d.confidence.toFixed(4)), live: true };
+    }
+  }
+  return out;
+}
 
 export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
   // (1) available agents
@@ -18,16 +67,28 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
     if (!wu) return { workunit_id: null };
     const questions = (JSON.parse(wu.payload_json) as { questions: { q_id: string; text: string; type: string }[] }).questions;
     const rows = db.prepare(
-      `SELECT a.name, a.model_class, r.payload_json FROM results r JOIN agents a ON a.agent_id = r.agent_id
+      `SELECT a.agent_id, a.name, a.model_class, a.skill, a.scored_count, r.payload_json
+       FROM results r JOIN agents a ON a.agent_id = r.agent_id
        WHERE r.workunit_id = ? ORDER BY a.name`,
-    ).all(wu.workunit_id) as { name: string; model_class: string; payload_json: string }[];
+    ).all(wu.workunit_id) as { agent_id: string; name: string; model_class: string; skill: number; scored_count: number; payload_json: string }[];
+    const answers = rows.map((r) => {
+      const p = JSON.parse(r.payload_json) as { answers: Answer[]; source?: string };
+      return { name: r.name, model_class: r.model_class, source: p.source ?? null, answers: p.answers };
+    });
+    // Scored slates carry a stored consensus; open slates get one computed live.
+    const consensus = wu.consensus_json
+      ? JSON.parse(wu.consensus_json)
+      : liveConsensus(
+          questions as Question[],
+          rows.map((r) => ({ agent_id: r.agent_id, skill: r.skill, scored_count: r.scored_count, answers: JSON.parse(r.payload_json).answers as Answer[] })),
+        );
     return {
       workunit_id: wu.workunit_id,
       mission_id: wu.mission_id,
       status: wu.status,
       questions: questions.map((q) => ({ q_id: q.q_id, text: q.text, type: q.type })),
-      answers: rows.map((r) => ({ name: r.name, model_class: r.model_class, answers: JSON.parse(r.payload_json).answers })),
-      consensus: wu.consensus_json ? JSON.parse(wu.consensus_json) : null,
+      answers,
+      consensus,
     };
   });
 
@@ -66,7 +127,7 @@ async function tick(){
     const b=await j('/v1/board/latest');
     if(b.workunit_id){
       document.getElementById('predwu').textContent=b.workunit_id+' ('+b.status+')';
-      let h='<tr><th>question</th>'+b.answers.map(a=>'<th>'+a.name+'</th>').join('')+'</tr>';
+      let h='<tr><th>question</th>'+b.answers.map(a=>'<th>'+a.name+(a.source?'<br><span class=dim style="font-weight:normal">reads '+a.source+'</span>':'')+'</th>').join('')+'</tr>';
       for(const q of b.questions){
         h+='<tr><td>'+q.text+'</td>'+b.answers.map(a=>{const ans=a.answers.find(x=>x.q_id===q.q_id);return '<td>'+fmt(ans)+'</td>';}).join('')+'</tr>';
       }
@@ -74,11 +135,11 @@ async function tick(){
       let ch='<tr><th>question</th><th>swarm consensus</th></tr>';
       for(const q of b.questions){
         const v=b.consensus?b.consensus[q.q_id]:null;
-        let call='<span class=dim>(pending — not resolved)</span>';
+        let call='<span class=dim>(no answers yet)</span>';
         if(v){
-          if(v.decision==null) call='<span class=dim>abstain (no quorum)</span>';
-          else if(q.type==='binary') call='<span class=pick>'+(v.decision===1?'Yes':'No')+'</span> ('+Math.round((v.confidence||0)*100)+'%)';
-          else call='<span class=pick>'+v.decision+'</span> ('+Math.round((v.confidence||0)*100)+'%)';
+          const conf=Math.round((v.confidence||0)*100)+'%';
+          const lead=q.type==='binary'?(v.p>=0.5?'Yes':'No'):v.choice;
+          call='<span class=pick>'+lead+'</span> '+conf;
         }
         ch+='<tr><td>'+q.text+'</td><td>'+call+'</td></tr>';
       }
