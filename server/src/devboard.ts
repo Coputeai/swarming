@@ -1,5 +1,7 @@
-// Dev board — minimal localhost view: (1) available agents, (2) each agent's
-// individual predictions for the latest slate, (3) the swarm consensus.
+// Public board — the swarm's World Cup predictions: per-match workunits with
+// live consensus for upcoming matches and receipts (✓/✗) for finished ones,
+// plus each agent's earned record. Read-only; safe to expose behind a proxy
+// that allows only GET /, /v1/agents, /v1/board/*.
 
 import type { FastifyInstance } from "fastify";
 import type { DatabaseSync } from "node:sqlite";
@@ -13,8 +15,7 @@ import {
 
 // Live consensus for an OPEN (not-yet-scored) slate: the swarm's current
 // committed call, computed with the same diversity-weighted cross-inhibition
-// engine the scorer uses — just without a ground-truth outcome. Lets the board
-// show what the swarm thinks right now, before any match resolves.
+// engine the scorer uses — just without a ground-truth outcome.
 function liveConsensus(
   questions: Question[],
   subs: { agent_id: string; skill: number; scored_count: number; answers: Answer[] }[],
@@ -54,101 +55,200 @@ function liveConsensus(
 }
 
 export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
-  // (1) available agents
   app.get("/v1/agents", async () => {
-    return db.prepare("SELECT name, model_class FROM agents ORDER BY name").all();
+    return db.prepare("SELECT name, model_class, skill, scored_count FROM agents ORDER BY skill DESC, name").all();
   });
 
-  // (2)+(3) latest slate: questions, each agent's answer, and the swarm consensus
-  app.get("/v1/board/latest", async () => {
-    const wu = db.prepare(
-      "SELECT workunit_id, mission_id, status, payload_json, consensus_json FROM workunits ORDER BY published_at DESC LIMIT 1",
-    ).get() as Record<string, string> | undefined;
-    if (!wu) return { workunit_id: null };
-    const questions = (JSON.parse(wu.payload_json) as { questions: { q_id: string; text: string; type: string }[] }).questions;
-    const rows = db.prepare(
-      `SELECT a.agent_id, a.name, a.model_class, a.skill, a.scored_count, r.payload_json
-       FROM results r JOIN agents a ON a.agent_id = r.agent_id
-       WHERE r.workunit_id = ? ORDER BY a.name`,
-    ).all(wu.workunit_id) as { agent_id: string; name: string; model_class: string; skill: number; scored_count: number; payload_json: string }[];
-    const answers = rows.map((r) => {
-      const p = JSON.parse(r.payload_json) as { answers: Answer[]; source?: string };
-      return { name: r.name, model_class: r.model_class, source: p.source ?? null, answers: p.answers };
-    });
-    // Scored slates carry a stored consensus; open slates get one computed live.
-    const consensus = wu.consensus_json
-      ? JSON.parse(wu.consensus_json)
-      : liveConsensus(
-          questions as Question[],
-          rows.map((r) => ({ agent_id: r.agent_id, skill: r.skill, scored_count: r.scored_count, answers: JSON.parse(r.payload_json).answers as Answer[] })),
-        );
+  // All matches of the latest mission slate, aggregated: upcoming (live
+  // consensus) + finished (stored consensus, outcome, per-agent ✓/✗).
+  app.get("/v1/board/matches", async () => {
+    const wus = db.prepare(
+      `SELECT workunit_id, status, closes_at, payload_json, consensus_json, outcome_json
+       FROM workunits WHERE mission_id = 'claim-check' ORDER BY closes_at`,
+    ).all() as Record<string, string | null>[];
+
+    const matches: unknown[] = [];
+    const agentStats = new Map<string, { correct: number; played: number; source: string | null }>();
+    let swarmCorrect = 0, swarmPlayed = 0;
+
+    for (const wu of wus) {
+      const q = (JSON.parse(wu.payload_json!) as { questions: Question[] }).questions[0];
+      if (!q) continue;
+      const rows = db.prepare(
+        `SELECT a.agent_id, a.name, a.skill, a.scored_count, r.payload_json
+         FROM results r JOIN agents a ON a.agent_id = r.agent_id
+         WHERE r.workunit_id = ? ORDER BY a.name`,
+      ).all(wu.workunit_id) as { agent_id: string; name: string; skill: number; scored_count: number; payload_json: string }[];
+
+      const outcome = wu.outcome_json ? (JSON.parse(wu.outcome_json) as Record<string, string>)[q.q_id] ?? null : null;
+      const picks = rows.map((r) => {
+        const p = JSON.parse(r.payload_json) as { answers: Answer[]; source?: string };
+        const a = p.answers.find((x) => x.q_id === q.q_id);
+        const choice = a?.choice ?? null;
+        const st = agentStats.get(r.name) ?? { correct: 0, played: 0, source: p.source ?? null };
+        st.source = p.source ?? st.source;
+        if (outcome && choice) { st.played++; if (choice === outcome) st.correct++; }
+        agentStats.set(r.name, st);
+        return { name: r.name, choice };
+      });
+
+      type Cons = { choice?: string; decision?: string | null; confidence?: number };
+      const consensus = wu.consensus_json
+        ? (JSON.parse(wu.consensus_json) as Record<string, Cons>)[q.q_id]
+        : (liveConsensus([q], rows.map((r) => ({ agent_id: r.agent_id, skill: r.skill, scored_count: r.scored_count, answers: (JSON.parse(r.payload_json) as { answers: Answer[] }).answers }))) as Record<string, Cons>)[q.q_id];
+      // The swarm's official pick is only a COMMITTED (quorum) decision; below
+      // quorum the swarm abstains — shown as a split, excluded from the record.
+      const committed = (consensus?.decision as string | null) ?? null;
+      if (outcome && committed) { swarmPlayed++; if (committed === outcome) swarmCorrect++; }
+
+      matches.push({
+        workunit_id: wu.workunit_id,
+        status: wu.status,
+        closes_at: wu.closes_at,
+        q_id: q.q_id,
+        text: q.text,
+        choices: q.choices,
+        outcome,
+        swarm: consensus ? { choice: committed, leaning: consensus.choice ?? null, agreement: Number((consensus.confidence ?? 0).toFixed(4)) } : null,
+        picks,
+      });
+    }
+
     return {
-      workunit_id: wu.workunit_id,
-      mission_id: wu.mission_id,
-      status: wu.status,
-      questions: questions.map((q) => ({ q_id: q.q_id, text: q.text, type: q.type })),
-      answers,
-      consensus,
+      tally: { swarm_correct: swarmCorrect, swarm_played: swarmPlayed },
+      agents: [...agentStats.entries()].map(([name, s]) => ({ name, source: s.source, correct: s.correct, played: s.played })),
+      matches,
     };
   });
 
   app.get("/", async (_req, reply) => reply.type("text/html").send(HTML));
 }
 
+// ---- Public page config: edit per round/launch ----
+const PAGE = {
+  round: "World Cup 2026 — Round of 32",
+  formUrl: "https://forms.gle/REPLACE_ME",
+  prize: "Sharpest predictors each round win small prizes. 🏆",
+  github: "https://github.com/Coputeai/swarming",
+  x: "https://x.com/",
+};
+
 const HTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>swarming — dev board</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Swarming — the swarm predicts the World Cup</title>
 <style>
-  body{background:#14120e;color:#e8e2d4;font:15px/1.5 ui-monospace,Consolas,monospace;max-width:1000px;margin:2rem auto;padding:0 1rem}
-  h1{color:#f5b81e;font-size:1.3rem} h2{color:#f5b81e;font-size:1rem;margin-top:2rem;border-bottom:1px solid #3a352a;padding-bottom:.3rem}
-  table{width:100%;border-collapse:collapse;margin-top:.5rem} td,th{text-align:left;padding:.3rem .6rem;border-bottom:1px solid #26221a;font-size:.92rem}
-  th{color:#9a917c;font-weight:normal} .dim{color:#9a917c} .pick{color:#f5b81e}
-  footer{margin-top:3rem;color:#5d574a;font-size:.8rem}
-</style></head><body>
-<h1>&#x1F41D; swarming <span class="dim">— dev board (localhost)</span></h1>
+  :root{--bg:#14120e;--card:#1d1a13;--line:#332e22;--gold:#f5b81e;--ink:#ece6d6;--dim:#9a917c;--good:#7fc06e;--bad:#e2564a}
+  *{box-sizing:border-box} body{background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0}
+  .wrap{max-width:760px;margin:0 auto;padding:1.2rem}
+  a{color:var(--gold)}
+  .hero{text-align:center;padding:1.4rem 0 .4rem}
+  .hero h1{font-size:2rem;margin:.2rem 0;color:var(--gold);letter-spacing:.5px}
+  .hero p{color:var(--dim);margin:.4rem auto;max-width:52ch}
+  .cta{display:inline-block;background:var(--gold);color:#1a1508;font-weight:700;text-decoration:none;padding:.75rem 1.4rem;border-radius:999px;margin:.8rem .3rem}
+  .prize{color:var(--gold);font-size:.92rem;margin-top:.3rem}
+  .tally{text-align:center;margin:.9rem auto 0;font-size:1.02rem}
+  .tally b{color:var(--gold);font-size:1.25rem}
+  h2{color:var(--gold);font-size:1.05rem;margin:1.8rem 0 .3rem;display:flex;justify-content:space-between;align-items:baseline}
+  h2 .tag{font-size:.72rem;color:var(--dim);font-weight:400}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:.85rem 1rem;margin:.6rem 0}
+  .match{display:flex;justify-content:space-between;align-items:center;font-weight:600;gap:.5rem;flex-wrap:wrap}
+  .match .vs{color:var(--dim);font-weight:400;font-size:.85rem;margin:0 .3rem}
+  .when{color:var(--dim);font-size:.78rem;font-weight:400}
+  .callrow{display:flex;align-items:center;gap:.6rem;margin:.55rem 0 .35rem}
+  .call{color:var(--gold);font-weight:700}
+  .ok{color:var(--good);font-weight:700} .miss{color:var(--bad);font-weight:700}
+  .bar{flex:1;height:7px;background:#2c2819;border-radius:5px;overflow:hidden}
+  .bar>i{display:block;height:100%;background:var(--gold)}
+  .conf{color:var(--dim);font-size:.85rem;min-width:3ch;text-align:right}
+  .agents{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.4rem}
+  .chip{font-size:.72rem;background:#252017;border:1px solid var(--line);border-radius:999px;padding:.12rem .55rem;color:var(--dim)}
+  .chip b{color:var(--ink);font-weight:600} .chip .src{color:var(--gold)}
+  .chip .y{color:var(--good)} .chip .n{color:var(--bad)}
+  .who{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+  .who .card{margin:0}.who b{color:var(--gold)}
+  .rec{font-size:.85rem;margin-top:.25rem}
+  footer{color:var(--dim);font-size:.82rem;text-align:center;margin:2.5rem 0 1.5rem;border-top:1px solid var(--line);padding-top:1rem}
+  .muted{color:var(--dim);font-size:.85rem}
+</style></head><body><div class="wrap">
 
-<h2>agents</h2>
-<table id="agents"></table>
+<div class="hero">
+  <h1>🐝 Swarming</h1>
+  <p><b>Four AI agents swarm to predict the World Cup — can you beat them?</b></p>
+  <p>Each agent reads a <i>different</i> live data source, they combine into one collective call, and every prediction is scored against the real result.</p>
+  <a class="cta" id="cta" href="#" target="_blank" rel="noopener">Make your prediction →</a>
+  <div class="prize" id="prize"></div>
+  <div class="tally" id="tally"></div>
+</div>
 
-<h2>predictions <span class="dim">— each agent's pick</span> <span class="dim" id="predwu"></span></h2>
-<table id="preds"></table>
+<h2>Upcoming — the swarm's call <span class="tag" id="roundtag"></span></h2>
+<div class="muted">Picks lock at kickoff — for the swarm and for you.</div>
+<div id="upcoming"><div class="muted">loading…</div></div>
 
-<h2>swarm consensus</h2>
-<table id="cons"></table>
+<h2>Results — the receipts</h2>
+<div id="finished"><div class="muted">loading…</div></div>
 
-<footer>refreshes every 2s &middot; every number reproducible from logs</footer>
-<script>
-async function j(u){return (await fetch(u)).json()}
-function fmt(a){ if(!a) return '<span class=dim>—</span>'; if(a.choice!==undefined) return a.choice; const p=a.p; return p>=0.5?('Yes '+Math.round(p*100)+'%'):('No '+Math.round((1-p)*100)+'%'); }
+<h2>Meet the swarm</h2>
+<div class="who" id="who"></div>
+
+<footer>
+  Every match pick traces to a live data source, submitted before kickoff, and scored against the real result.<br>
+  <a id="gh" href="#">How it works (open source)</a> &middot; <a id="xlink" href="#">Follow Waggle</a>
+  <div class="muted" id="status" style="margin-top:.5rem"></div>
+</footer>
+
+</div><script>
+var CFG=${JSON.stringify(PAGE)};
+document.getElementById('cta').href=CFG.formUrl;
+document.getElementById('prize').textContent=CFG.prize;
+document.getElementById('roundtag').textContent=CFG.round;
+document.getElementById('gh').href=CFG.github;
+document.getElementById('xlink').href=CFG.x;
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function srcLabel(s){if(!s)return '';if(s.indexOf('odds')===0)return 'betting odds';if(s.indexOf('record')===0)return 'group form';if(s.indexOf('goaldiff')===0)return 'goal difference';if(s.indexOf('goals')===0)return 'attack vs defense';return esc(s);}
+function shortName(n){return esc(n.replace('deepseek-','ds-'));}
+function kickoff(iso){var d=new Date(iso);return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
+async function j(u){return (await fetch(u)).json();}
+function title(m){var t=m.text.replace('Round of 32 — which team advances: ','').replace('?','');
+  return t.indexOf(' vs ')>-1?esc(t).replace(' vs ','<span class="vs">vs</span>'):esc(t);}
+function chips(m){return m.picks.map(function(p){
+  var mark=m.outcome&&p.choice?(p.choice===m.outcome?' <span class="y">✓</span>':' <span class="n">✗</span>'):'';
+  return '<span class="chip"><b>'+shortName(p.name)+'</b>: '+esc(p.choice||'—')+mark+'</span>';}).join('');}
 async function tick(){
   try{
-    const ag=await j('/v1/agents');
-    document.getElementById('agents').innerHTML='<tr><th>agent</th><th>model</th></tr>'+
-      ag.map(a=>'<tr><td>'+a.name+'</td><td class="dim">'+a.model_class+'</td></tr>').join('');
-    const b=await j('/v1/board/latest');
-    if(b.workunit_id){
-      document.getElementById('predwu').textContent=b.workunit_id+' ('+b.status+')';
-      let h='<tr><th>question</th>'+b.answers.map(a=>'<th>'+a.name+(a.source?'<br><span class=dim style="font-weight:normal">reads '+a.source+'</span>':'')+'</th>').join('')+'</tr>';
-      for(const q of b.questions){
-        h+='<tr><td>'+q.text+'</td>'+b.answers.map(a=>{const ans=a.answers.find(x=>x.q_id===q.q_id);return '<td>'+fmt(ans)+'</td>';}).join('')+'</tr>';
+    var b=await j('/v1/board/matches');
+    var t=b.tally;
+    document.getElementById('tally').innerHTML=t.swarm_played?('Swarm record so far: <b>'+t.swarm_correct+' / '+t.swarm_played+'</b> correct'):'';
+    var up='',fin='';
+    for(var i=0;i<b.matches.length;i++){
+      var m=b.matches[i];
+      var pct=m.swarm?Math.round(m.swarm.agreement*100):0;
+      var committed=m.swarm&&m.swarm.choice;
+      if(m.outcome){
+        var hit=committed&&m.swarm.choice===m.outcome;
+        var callHtml=committed
+          ?'<span class="'+(hit?'ok':'miss')+'">'+esc(m.swarm.choice)+' '+(hit?'✓':'✗')+'</span>'
+          :'<span class="muted">split — no call</span>';
+        fin+='<div class="card"><div class="match"><span>'+title(m)+'</span><span class="when">final</span></div>'+
+          '<div class="callrow"><span class="muted">swarm picked</span> '+callHtml+
+          '<span class="muted">· winner: '+esc(m.outcome)+'</span></div>'+
+          '<div class="agents">'+chips(m)+'</div></div>';
+      }else{
+        var callHtml2=committed
+          ?'<span class="call">'+esc(m.swarm.choice)+'</span><span class="bar"><i style="width:'+pct+'%"></i></span><span class="conf" title="how strongly the swarm agrees">'+pct+'% agreement</span>'
+          :'<span class="muted">split so far — no quorum'+(m.swarm&&m.swarm.leaning?' (leaning '+esc(m.swarm.leaning)+')':'')+'</span>';
+        up+='<div class="card"><div class="match"><span>'+title(m)+'</span><span class="when">kicks off '+kickoff(m.closes_at)+'</span></div>'+
+          '<div class="callrow"><span class="muted">swarm:</span> '+callHtml2+'</div>'+
+          '<div class="agents">'+chips(m)+'</div></div>';
       }
-      document.getElementById('preds').innerHTML=h;
-      let ch='<tr><th>question</th><th>swarm consensus</th></tr>';
-      for(const q of b.questions){
-        const v=b.consensus?b.consensus[q.q_id]:null;
-        let call='<span class=dim>(no answers yet)</span>';
-        if(v){
-          const conf=Math.round((v.confidence||0)*100)+'%';
-          const lead=q.type==='binary'?(v.p>=0.5?'Yes':'No'):v.choice;
-          call='<span class=pick>'+lead+'</span> '+conf;
-        }
-        ch+='<tr><td>'+q.text+'</td><td>'+call+'</td></tr>';
-      }
-      document.getElementById('cons').innerHTML=ch;
-    } else {
-      document.getElementById('preds').innerHTML='<tr><td class=dim>no slate yet</td></tr>';
-      document.getElementById('cons').innerHTML='';
     }
+    document.getElementById('upcoming').innerHTML=up||'<div class="muted">No open matches — next round soon.</div>';
+    document.getElementById('finished').innerHTML=fin||'<div class="muted">No results yet.</div>';
+    document.getElementById('who').innerHTML=(b.agents||[]).map(function(a){
+      return '<div class="card"><b>'+shortName(a.name)+'</b>'+
+        '<div class="muted">reads <span style="color:var(--gold)">'+srcLabel(a.source)+'</span></div>'+
+        (a.played?'<div class="rec">record: <b style="color:var(--gold)">'+a.correct+'/'+a.played+'</b> correct</div>':'<div class="rec muted">unscored</div>')+'</div>';}).join('');
+    document.getElementById('status').textContent='Updated '+new Date().toLocaleTimeString();
   }catch(e){}
 }
-tick();setInterval(tick,2000);
+tick();setInterval(tick,5000);
 </script></body></html>`;

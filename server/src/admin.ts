@@ -126,7 +126,7 @@ switch (cmd) {
     if (auto) {
       for (const q of questions) {
         if (q.q_id in outcomes) continue;
-        const out = await resolveCoingecko(q, wu.published_at, wu.closes_at);
+        const out = (await resolveCoingecko(q, wu.published_at, wu.closes_at)) ?? (await resolveEspnMatch(q));
         if (out !== null) {
           outcomes[q.q_id] = out;
           console.log(`auto-resolved ${q.q_id} = ${out} (${q.resolution.source}, ${q.resolution.rule})`);
@@ -332,6 +332,41 @@ switch (cmd) {
  * close time, from CoinGecko's public market_chart/range API. Anything else
  * returns null (operator must supply the outcome explicitly).
  */
+/**
+ * Deterministic oracle for `espn:wc:<TeamA>|<TeamB>` sources with rule
+ * "match-winner": reads the finished match from ESPN's public World Cup
+ * scoreboard and returns the advancing team's name (exactly as listed in the
+ * question's choices). Returns null while the match hasn't finished — the
+ * operator simply retries later.
+ */
+async function resolveEspnMatch(q: Question): Promise<string | null> {
+  const m = q.resolution.source.match(/^espn:wc:(.+)\|(.+)$/);
+  if (!m || q.resolution.rule !== "match-winner" || q.type !== "choice") return null;
+  const want = [m[1], m[2]];
+  // search a window around the scheduled resolve time
+  const d = new Date(q.resolution.resolve_at ?? Date.now());
+  const day = (x: Date) => x.toISOString().slice(0, 10).replace(/-/g, "");
+  const from = new Date(d.getTime() - 2 * 86400_000), to = new Date(d.getTime() + 2 * 86400_000);
+  const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${day(from)}-${day(to)}`, { signal: AbortSignal.timeout(9000) });
+  if (!r.ok) throw new Error(`espn ${r.status}`);
+  type Ev = { status?: { type?: { state?: string } }; competitions?: { competitors?: { winner?: boolean; team?: { displayName?: string } }[] }[] };
+  const j = (await r.json()) as { events?: Ev[] };
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+  for (const ev of j.events ?? []) {
+    const cs = ev.competitions?.[0]?.competitors ?? [];
+    const names = cs.map((c) => c.team?.displayName ?? "");
+    const hit = want.every((w) => names.some((n) => norm(n) === norm(w) || norm(n).includes(norm(w)) || norm(w).includes(norm(n))));
+    if (!hit) continue;
+    if (ev.status?.type?.state !== "post") return null; // not finished yet
+    const winner = cs.find((c) => c.winner)?.team?.displayName;
+    if (!winner) return null;
+    // map back to the exact choice string used in the question
+    const choice = q.choices.find((c) => norm(c) === norm(winner) || norm(winner).includes(norm(c)) || norm(c).includes(norm(winner)));
+    return choice ?? null;
+  }
+  return null;
+}
+
 async function resolveCoingecko(q: Question, publishedAt: string, closesAt: string): Promise<0 | 1 | null> {
   const m = q.resolution.source.match(/^coingecko:([a-z0-9-]+)$/);
   if (!m || q.resolution.rule !== "close>=open" || q.type !== "binary") return null;
