@@ -248,7 +248,34 @@ async function tick(){
         '<div class="muted">reads <span style="color:var(--gold)">'+srcLabel(a.source)+'</span></div>'+
         (a.played?'<div class="rec">record: <b style="color:var(--gold)">'+a.correct+'/'+a.played+'</b> correct</div>':'<div class="rec muted">unscored</div>')+'</div>';}).join('');
     document.getElementById('status').textContent='Updated '+new Date().toLocaleTimeString();
-  }catch(e){}
+    return b;
+  }catch(e){ return null; }
 }
-tick();setInterval(tick,5000);
+// Schedule-aware refresh: matches kick off at known times (closes_at), so
+// instead of blind polling — sleep until the next kickoff, poll every 2 min
+// only while a match is in progress (kickoff → +3.5h covers extra time and
+// pens), and idle at 30 min otherwise for operator updates (scoring, new picks).
+var LIVE_MS=3.5*3600*1000, POLL_LIVE=120000, IDLE=1800000, MIN=30000;
+function nextDelay(b){
+  if(!b||!b.matches) return POLL_LIVE;
+  var now=Date.now(), live=false, nextKick=Infinity;
+  for(var i=0;i<b.matches.length;i++){
+    var m=b.matches[i];
+    if(m.outcome) continue;
+    var k=Date.parse(m.closes_at);
+    if(now>=k && now<k+LIVE_MS) live=true;
+    else if(k>now && k<nextKick) nextKick=k;
+  }
+  if(live) return POLL_LIVE;
+  if(nextKick<Infinity) return Math.min(Math.max(nextKick-now+MIN,MIN),IDLE);
+  return IDLE;
+}
+async function loop(){
+  var b=await tick();
+  var d=nextDelay(b);
+  var el=document.getElementById('status');
+  if(el&&el.textContent) el.textContent+=' · next check '+(d>=60000?Math.round(d/60000)+' min':Math.round(d/1000)+'s');
+  setTimeout(loop,d);
+}
+loop();
 </script></body></html>`;
