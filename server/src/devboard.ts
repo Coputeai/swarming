@@ -139,8 +139,7 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
 // ---- Public page config: edit per round/launch ----
 const PAGE = {
   round: "World Cup 2026 Round of 32 (Ongoing)",
-  formUrl: "https://forms.gle/REPLACE_ME",
-  prize: "Sharpest predictors each round win small prizes. 🏆",
+  formUrl: "https://forms.gle/Fn6fZh4Z6pt5fxxt8",
   x: "https://x.com/Coputeai",
 };
 
@@ -189,7 +188,6 @@ const HTML = `<!doctype html>
   <p><b>Four AI agents swarm to predict the World Cup, can you beat them?</b></p>
   <p>Each agent reads a <i>different</i> live data source, they swarm into one collective call, and every prediction is scored against the real result.</p>
   <a class="cta" id="cta" href="#" target="_blank" rel="noopener">Make your prediction →</a>
-  <div class="prize" id="prize"></div>
   <div class="tally" id="tally"></div>
 </div>
 
@@ -200,18 +198,17 @@ const HTML = `<!doctype html>
 <h2>Results Recap:</h2>
 <div id="finished"><div class="muted">loading…</div></div>
 
-<h2>Meet the swarm</h2>
+<h2>Meet The Swarm</h2>
 <div class="who" id="who"></div>
 
 <footer>
-  <a id="xlink" href="#">Follow @Coputeai</a>
+  <a id="xlink" href="#" target="_blank" rel="noopener">Follow @Coputeai</a>
   <div class="muted" id="status" style="margin-top:.5rem"></div>
 </footer>
 
 </div><script>
 var CFG=${JSON.stringify(PAGE)};
 document.getElementById('cta').href=CFG.formUrl;
-document.getElementById('prize').textContent=CFG.prize;
 document.getElementById('roundtag').textContent=CFG.round;
 document.getElementById('xlink').href=CFG.x;
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
