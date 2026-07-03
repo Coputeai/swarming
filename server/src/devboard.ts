@@ -122,15 +122,26 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.get("/", async (_req, reply) => reply.type("text/html").send(HTML));
+
+  // header art (cached once; served same-origin so the page works offline/deployed)
+  let headerPng: Buffer | null = null;
+  app.get("/assets/header.png", async (_req, reply) => {
+    if (!headerPng) {
+      const { readFileSync } = await import("node:fs");
+      const { join, dirname } = await import("node:path");
+      const { fileURLToPath } = await import("node:url");
+      headerPng = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "public", "header.png"));
+    }
+    reply.type("image/png").header("cache-control", "public, max-age=86400").send(headerPng);
+  });
 }
 
 // ---- Public page config: edit per round/launch ----
 const PAGE = {
-  round: "World Cup 2026 — Round of 32",
+  round: "World Cup 2026 Round of 32 (Ongoing)",
   formUrl: "https://forms.gle/REPLACE_ME",
   prize: "Sharpest predictors each round win small prizes. 🏆",
-  github: "https://github.com/Coputeai/swarming",
-  x: "https://x.com/",
+  x: "https://x.com/Coputeai",
 };
 
 const HTML = `<!doctype html>
@@ -142,7 +153,8 @@ const HTML = `<!doctype html>
   .wrap{max-width:760px;margin:0 auto;padding:1.2rem}
   a{color:var(--gold)}
   .hero{text-align:center;padding:1.4rem 0 .4rem}
-  .hero h1{font-size:2rem;margin:.2rem 0;color:var(--gold);letter-spacing:.5px}
+  .banner{width:100%;max-height:280px;object-fit:cover;border-radius:12px;border:1px solid var(--line);display:block}
+  .hero h1{font-size:2rem;margin:.6rem 0 .2rem;color:var(--gold);letter-spacing:.5px}
   .hero p{color:var(--dim);margin:.4rem auto;max-width:52ch}
   .cta{display:inline-block;background:var(--gold);color:#1a1508;font-weight:700;text-decoration:none;padding:.75rem 1.4rem;border-radius:999px;margin:.8rem .3rem}
   .prize{color:var(--gold);font-size:.92rem;margin-top:.3rem}
@@ -172,27 +184,27 @@ const HTML = `<!doctype html>
 </style></head><body><div class="wrap">
 
 <div class="hero">
-  <h1>🐝 Swarming</h1>
-  <p><b>Four AI agents swarm to predict the World Cup — can you beat them?</b></p>
-  <p>Each agent reads a <i>different</i> live data source, they combine into one collective call, and every prediction is scored against the real result.</p>
+  <img class="banner" src="/assets/header.png" alt="Four AI agents swarming around a shared decision cube">
+  <h1>Swarming</h1>
+  <p><b>Four AI agents swarm to predict the World Cup, can you beat them?</b></p>
+  <p>Each agent reads a <i>different</i> live data source, they swarm into one collective call, and every prediction is scored against the real result.</p>
   <a class="cta" id="cta" href="#" target="_blank" rel="noopener">Make your prediction →</a>
   <div class="prize" id="prize"></div>
   <div class="tally" id="tally"></div>
 </div>
 
-<h2>Upcoming — the swarm's call <span class="tag" id="roundtag"></span></h2>
-<div class="muted">Picks lock at kickoff — for the swarm and for you.</div>
+<h2>Upcoming Swarm's Call: <span class="tag" id="roundtag"></span></h2>
+<div class="muted">Picks lock at kickoff, for the swarm and for you.</div>
 <div id="upcoming"><div class="muted">loading…</div></div>
 
-<h2>Results — the receipts</h2>
+<h2>Results Recap:</h2>
 <div id="finished"><div class="muted">loading…</div></div>
 
 <h2>Meet the swarm</h2>
 <div class="who" id="who"></div>
 
 <footer>
-  Every match pick traces to a live data source, submitted before kickoff, and scored against the real result.<br>
-  <a id="gh" href="#">How it works (open source)</a> &middot; <a id="xlink" href="#">Follow Waggle</a>
+  <a id="xlink" href="#">Follow @Coputeai</a>
   <div class="muted" id="status" style="margin-top:.5rem"></div>
 </footer>
 
@@ -201,11 +213,11 @@ var CFG=${JSON.stringify(PAGE)};
 document.getElementById('cta').href=CFG.formUrl;
 document.getElementById('prize').textContent=CFG.prize;
 document.getElementById('roundtag').textContent=CFG.round;
-document.getElementById('gh').href=CFG.github;
 document.getElementById('xlink').href=CFG.x;
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function srcLabel(s){if(!s)return '';if(s.indexOf('odds')===0)return 'betting odds';if(s.indexOf('record')===0)return 'group form';if(s.indexOf('goaldiff')===0)return 'goal difference';if(s.indexOf('goals')===0)return 'attack vs defense';return esc(s);}
-function shortName(n){return esc(n.replace('deepseek-','ds-'));}
+var PERSONA={'deepseek-flash':'The Quick Picker','deepseek-pro':'The &quot;Professional&quot;','llama31':'The Chill One','qwen25':'The Outlier'};
+function shortName(n){return PERSONA[n]||esc(n);}
 function kickoff(iso){var d=new Date(iso);return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
 async function j(u){return (await fetch(u)).json();}
 function title(m){var t=m.text.replace('Round of 32 — which team advances: ','').replace('?','');
@@ -228,9 +240,9 @@ async function tick(){
         var callHtml=committed
           ?'<span class="'+(hit?'ok':'miss')+'">'+esc(m.swarm.choice)+' '+(hit?'✓':'✗')+'</span>'
           :'<span class="muted">split — no call</span>';
-        fin+='<div class="card"><div class="match"><span>'+title(m)+'</span><span class="when">final</span></div>'+
+        fin+='<div class="card"><div class="match"><span>'+title(m)+'</span></div>'+
           '<div class="callrow"><span class="muted">swarm picked</span> '+callHtml+
-          '<span class="muted">· winner: '+esc(m.outcome)+'</span></div>'+
+          '<span class="muted">· winner: <b style="color:var(--ink)">'+esc(m.outcome)+'</b></span></div>'+
           '<div class="agents">'+chips(m)+'</div></div>';
       }else{
         var callHtml2=committed
@@ -255,7 +267,7 @@ async function tick(){
 // instead of blind polling — sleep until the next kickoff, poll every 2 min
 // only while a match is in progress (kickoff → +3.5h covers extra time and
 // pens), and idle at 30 min otherwise for operator updates (scoring, new picks).
-var LIVE_MS=3.5*3600*1000, POLL_LIVE=120000, IDLE=1800000, MIN=30000;
+var LIVE_MS=3.5*3600*1000, POLL_LIVE=120000, IDLE=4*3600*1000, MIN=30000;
 function nextDelay(b){
   if(!b||!b.matches) return POLL_LIVE;
   var now=Date.now(), live=false, nextKick=Infinity;
@@ -274,7 +286,8 @@ async function loop(){
   var b=await tick();
   var d=nextDelay(b);
   var el=document.getElementById('status');
-  if(el&&el.textContent) el.textContent+=' · next check '+(d>=60000?Math.round(d/60000)+' min':Math.round(d/1000)+'s');
+  var human=d>=3600000?(Math.round(d/3600000*10)/10)+' hours':(d>=60000?Math.round(d/60000)+' min':Math.round(d/1000)+'s');
+  if(el&&el.textContent) el.textContent+=' · next check '+human;
   setTimeout(loop,d);
 }
 loop();
