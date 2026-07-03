@@ -138,7 +138,7 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
 
 // ---- Public page config: edit per round/launch ----
 const PAGE = {
-  round: "World Cup 2026 Round of 32 (Ongoing)",
+  round: "World Cup 2026 Knockout Stage (Ongoing)",
   formUrl: "https://forms.gle/Fn6fZh4Z6pt5fxxt8",
   x: "https://x.com/Coputeai",
 };
@@ -217,8 +217,10 @@ var PERSONA={'deepseek-flash':'The Quick Picker','deepseek-pro':'The &quot;Profe
 function shortName(n){return PERSONA[n]||esc(n);}
 function kickoff(iso){var d=new Date(iso);return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
 async function j(u){return (await fetch(u)).json();}
-function title(m){var t=m.text.replace('Round of 32 — which team advances: ','').replace('?','');
-  return t.indexOf(' vs ')>-1?esc(t).replace(' vs ','<span class="vs">vs</span>'):esc(t);}
+function title(m){var t=m.text.replace(/^.+? — which team (advances|wins): /,'').replace('?','');
+  var round=(m.text.match(/^(.+?) — /)||[])[1]||'';
+  var core=t.indexOf(' vs ')>-1?esc(t).replace(' vs ','<span class="vs">vs</span>'):esc(t);
+  return core+(round?' <span class="when">'+esc(round)+'</span>':'');}
 function chips(m){return m.picks.map(function(p){
   var mark=m.outcome&&p.choice?(p.choice===m.outcome?' <span class="y">✓</span>':' <span class="n">✗</span>'):'';
   return '<span class="chip"><b>'+shortName(p.name)+'</b>: '+esc(p.choice||'—')+mark+'</span>';}).join('');}

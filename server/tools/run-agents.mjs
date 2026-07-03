@@ -13,16 +13,16 @@ import { buildPrompt, parseAnswers } from "../../packages/cli/src/predict.ts";
 import { fetchSource } from "../../packages/cli/src/tools.ts";
 
 const db = openDb();
-const dk = process.env.DEEPSEEK_API_KEY;
 const nowIso = new Date().toISOString();
 
 // Each agent reads a DIFFERENT data source — divergence comes from what they
-// look at, not just which model they are.
+// look at, not just which model they are. All providers are OpenAI-compatible
+// chat endpoints; the key comes from the named env var (never hardcoded).
 const agents = [
-  { name: "deepseek-pro",   mc: "deepseek/deepseek-v4-pro",   prov: "deepseek", model: "deepseek-v4-pro",   source: "odds:all" },
-  { name: "deepseek-flash", mc: "deepseek/deepseek-v4-flash", prov: "deepseek", model: "deepseek-v4-flash", source: "record:all" },
-  { name: "llama31",        mc: "ollama/llama3.1:8b",         prov: "ollama",   model: "llama3.1:8b",        source: "goaldiff:all" },
-  { name: "qwen25",         mc: "ollama/qwen2.5:7b",          prov: "ollama",   model: "qwen2.5:7b",         source: "goals:all" },
+  { name: "deepseek-pro",   mc: "deepseek/deepseek-v4-pro",   url: "https://api.deepseek.com/chat/completions",                                keyEnv: "DEEPSEEK_API_KEY", model: "deepseek-v4-pro",   source: "odds:all" },
+  { name: "deepseek-flash", mc: "deepseek/deepseek-v4-flash", url: "https://api.deepseek.com/chat/completions",                                keyEnv: "DEEPSEEK_API_KEY", model: "deepseek-v4-flash", source: "record:all" },
+  { name: "llama31",        mc: "gemini/gemini-2.5-flash",    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", keyEnv: "GEMINI_API_KEY",   model: "gemini-2.5-flash",  source: "goaldiff:all" },
+  { name: "qwen25",         mc: "groq/qwen3-32b",             url: "https://api.groq.com/openai/v1/chat/completions",                          keyEnv: "GROQ_API_KEY",     model: "qwen/qwen3-32b",    source: "goals:all" },
 ];
 let n = 0;
 for (const a of agents) {
@@ -31,6 +31,8 @@ for (const a of agents) {
   db.prepare(`INSERT OR IGNORE INTO agents (agent_id,pubkey,name,agent_number,model_class,capabilities_json,created_at,last_seen_at,skill,points,streak,tier_index,scored_count)
               VALUES (?,?,?,?,?,'["llm.reasoning","data.read"]',?,?,0.5,0,0,0,0)`)
     .run(a.id, "pk_st_" + a.name, a.name, 100 + n, a.mc, nowIso, nowIso);
+  // keep the model label honest if an agent's underlying model was swapped
+  db.prepare("UPDATE agents SET model_class = ?, last_seen_at = ? WHERE agent_id = ?").run(a.mc, nowIso, a.id);
   db.prepare("INSERT OR REPLACE INTO subscriptions (agent_id,mission_id,enabled,updated_at) VALUES (?, 'claim-check', 1, ?)").run(a.id, nowIso);
 }
 
@@ -56,12 +58,19 @@ for (const q of questions) for (const c of (q.choices ?? [])) slateTeams.add(c);
 const SWARMING_MD = "Independent forecaster. Weigh your live data heavily; only diverge from what it indicates when you have a concrete reason. Calibrate honestly.";
 
 async function call(a, prompt) {
-  if (a.prov === "deepseek") {
-    const r = await fetch("https://api.deepseek.com/chat/completions", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${dk}` }, body: JSON.stringify({ model: a.model, messages: [{ role: "user", content: prompt }] }) });
-    if (!r.ok) throw new Error("deepseek " + r.status); return (await r.json()).choices[0].message.content;
-  }
-  const r = await fetch("http://127.0.0.1:11434/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: a.model, messages: [{ role: "user", content: prompt }], stream: false }) });
-  if (!r.ok) throw new Error("ollama " + r.status); return (await r.json()).message.content;
+  const key = process.env[a.keyEnv];
+  if (!key) throw new Error(`missing env ${a.keyEnv}`);
+  const r = await fetch(a.url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({ model: a.model, messages: [{ role: "user", content: prompt }] }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!r.ok) throw new Error(`${a.model} HTTP ${r.status}`);
+  const content = (await r.json()).choices[0].message.content;
+  // reasoning models (e.g. qwen3) may emit <think>…</think> before the JSON —
+  // strip it so stray brackets in the reasoning can't corrupt parsing
+  return String(content).replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 }
 
 // Parse a team-keyed blob ("PREFIX — Team val; Team val; ...") into Team->val.
