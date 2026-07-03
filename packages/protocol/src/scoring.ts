@@ -98,6 +98,13 @@ export function answerDistance(a: Answer[], b: Answer[], questions: Question[]):
   return sum / questions.length;
 }
 
+// Clustering needs enough answer dimensions to distinguish copying from honest
+// agreement: on a single-question slate, "picked the same option" is not
+// evidence of collusion, and discounting it makes every majority cancel
+// against its minority (a 3-1 vote on one question degenerates to a dead tie).
+// Below this threshold every agent keeps multiplier 1.
+export const MIN_QUESTIONS_FOR_DIVERSITY = 2;
+
 /**
  * Cluster near-duplicate submissions (distance ≤ epsilon, transitive via
  * union-find) and return each agent's diversity multiplier = 1 / clusterSize.
@@ -109,6 +116,9 @@ export function diversityMultipliers(
   questions: Question[],
   epsilon: number = DIVERSITY_EPSILON,
 ): Map<string, number> {
+  if (questions.length < MIN_QUESTIONS_FOR_DIVERSITY) {
+    return new Map(submissions.map((s) => [s.agent_id, 1]));
+  }
   const n = submissions.length;
   const parent = Array.from({ length: n }, (_, i) => i);
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));

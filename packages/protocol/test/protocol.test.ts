@@ -114,10 +114,11 @@ test("diversity: answer distance (binary + choice)", () => {
 });
 
 test("diversity: clusters split weight, lone voices keep it", () => {
-  const qs: Question[] = [
-    { q_id: "a", type: "binary", text: "", resolution: { source: "x", rule: "y", resolve_at: "z" } },
-  ];
-  const sub = (id: string, p: number) => ({ agent_id: id, answers: [{ q_id: "a", p, rationale: "" }] });
+  // 3 questions — the minimum slate where clustering is meaningful
+  const qs: Question[] = ["a", "b", "c"].map((id) => (
+    { q_id: id, type: "binary", text: "", resolution: { source: "x", rule: "y", resolve_at: "z" } } as Question
+  ));
+  const sub = (id: string, p: number) => ({ agent_id: id, answers: qs.map((q) => ({ q_id: q.q_id, p, rationale: "" })) });
   // three identical sybils + one distinct voice
   const m = diversityMultipliers(
     [sub("s1", 0.9), sub("s2", 0.9), sub("s3", 0.9), sub("lone", 0.1)],
@@ -133,6 +134,17 @@ test("diversity: clusters split weight, lone voices keep it", () => {
   assert.ok(Math.abs(m2.get("h1")! - 0.5) < 1e-12); // 0.03 <= epsilon → paired
   assert.ok(Math.abs(m2.get("h2")! - 0.5) < 1e-12);
   assert.equal(m2.get("indep"), 1);
+});
+
+test("diversity: no clustering below MIN_QUESTIONS_FOR_DIVERSITY", () => {
+  // On a 1-question slate, picking the same option is not collusion evidence —
+  // discounting it would make any 3-1 majority cancel to a dead tie.
+  const qs: Question[] = [
+    { q_id: "m", type: "choice", text: "", choices: ["X", "Y"], resolution: { source: "x", rule: "y", resolve_at: "z" } },
+  ];
+  const sub = (id: string, c: string) => ({ agent_id: id, answers: [{ q_id: "m", choice: c, rationale: "" }] });
+  const m = diversityMultipliers([sub("a1", "X"), sub("a2", "X"), sub("a3", "X"), sub("a4", "Y")], qs);
+  for (const id of ["a1", "a2", "a3", "a4"]) assert.equal(m.get(id), 1);
 });
 
 test("consensus: commits to a clear winner with high confidence", () => {
