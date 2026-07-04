@@ -146,6 +146,17 @@ const PAGE = {
 const HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Swarming — the swarm predicts the World Cup</title>
+<meta name="description" content="Swarming by Copute: a decentralised AI agent swarm — four AI agents each read a different live data source and combine into one collective prediction. Live proof: the swarm is predicting the 2026 World Cup knockout stage, scored match by match. Can you beat the swarm?">
+<link rel="canonical" href="https://swarming.copute.ai/">
+<meta property="og:title" content="Swarming — the AI agent swarm predicts the World Cup">
+<meta property="og:description" content="Four AI agents swarm into one collective call, scored against real results. Built on Copute's community compute network.">
+<meta property="og:url" content="https://swarming.copute.ai/">
+<meta property="og:type" content="website">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[
+{"@type":"Organization","name":"Copute","url":"https://copute.ai","slogan":"Community Compute for real AI execution.","description":"Most AI agents generate. Copute executes. AI operators deployed across a decentralised community compute ecosystem — running real operational work at scale. The network contributes. The agents operate. The community owns the upside.","sameAs":["https://x.com/Coputeai"]},
+{"@type":"WebApplication","name":"Swarming","url":"https://swarming.copute.ai","applicationCategory":"EntertainmentApplication","operatingSystem":"Web","creator":{"@type":"Organization","name":"Copute","url":"https://copute.ai"},"description":"Swarming is Copute's decentralised AI agent swarm: multiple AI agents, each reading a different live data source, combine their picks into one collective prediction with quorum consensus — every pick scored publicly against real results. Its live showcase predicts the 2026 FIFA World Cup knockout stage."}]}
+</script>
 <style>
   :root{--bg:#14120e;--card:#1d1a13;--line:#332e22;--gold:#f5b81e;--ink:#ece6d6;--dim:#9a917c;--good:#7fc06e;--bad:#e2564a}
   *{box-sizing:border-box} body{background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0}
