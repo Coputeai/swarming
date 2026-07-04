@@ -281,13 +281,19 @@ function nextDelay(b){
   if(nextKick<Infinity) return Math.min(Math.max(nextKick-now+MIN,MIN),IDLE);
   return IDLE;
 }
+var loopTimer=null;
 async function loop(){
   var b=await tick();
   var d=nextDelay(b);
   var el=document.getElementById('status');
   var human=d>=3600000?(Math.round(d/3600000*10)/10)+' hours':(d>=60000?Math.round(d/60000)+' min':Math.round(d/1000)+'s');
   if(el&&el.textContent) el.textContent+=' · next check '+human;
-  setTimeout(loop,d);
+  loopTimer=setTimeout(loop,d);
 }
+// Returning to the tab refreshes immediately — a tab left open never shows
+// stale results, regardless of the schedule.
+document.addEventListener('visibilitychange',function(){
+  if(document.visibilityState==='visible'){ if(loopTimer)clearTimeout(loopTimer); loop(); }
+});
 loop();
 </script></body></html>`;
