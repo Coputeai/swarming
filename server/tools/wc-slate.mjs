@@ -17,7 +17,7 @@ const ROUNDS = {
   "round-of-16": { label: "Round of 16", key: "r16" },
   "quarterfinals": { label: "Quarter-final", key: "qf" },
   "semifinals": { label: "Semi-final", key: "sf" },
-  "third-place": { label: "Third place", key: "3rd" },
+  "3rd-place-match": { label: "Third place", key: "3rd" },
   "final": { label: "Final", key: "final" },
 };
 const isPlaceholder = (n) => !n || /winner|advanc|runner|tbd|\bvs\b|loser/i.test(n);
