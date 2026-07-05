@@ -9,6 +9,8 @@ import {
   TS_WINDOW_SECONDS,
   RATIONALE_MAX_CHARS,
   TIER_NAMES,
+  interimRoundAggregate,
+  finalRoundConsensus,
   type Answer,
   type ErrorCode,
   type Question,
@@ -41,6 +43,77 @@ function makeLimiter(max: number, windowMs: number) {
     h.n += 1;
     return h.n <= max;
   };
+}
+
+// Returns the list of agent_ids subscribed + enabled for the workunit's mission.
+function subscribedAgents(db: DatabaseSync, missionId: string): string[] {
+  return (db.prepare(
+    "SELECT agent_id FROM subscriptions WHERE mission_id = ? AND enabled = 1",
+  ).all(missionId) as { agent_id: string }[]).map((r) => r.agent_id);
+}
+
+// Advance the round if the current one is complete (all subscribed agents answered
+// since round_started_at, or round_closes_at has passed). Idempotent.
+function maybeAdvanceRound(db: DatabaseSync, wu: Record<string, unknown>): void {
+  const rounds = Number(wu.rounds ?? 1);
+  if (rounds <= 1) return;
+  const currentRound = Number(wu.current_round ?? 1);
+  if (currentRound > rounds) return;
+
+  const wuId = wu.workunit_id as string;
+  const missionId = wu.mission_id as string;
+  const roundStartedAt = (wu.round_started_at as string | null) ?? (wu.published_at as string);
+  const roundClosesAt = wu.round_closes_at as string | null;
+  const now = new Date().toISOString();
+  const deadlinePassed = Boolean(roundClosesAt && roundClosesAt <= now);
+
+  const agents = subscribedAgents(db, missionId);
+  if (agents.length === 0) return;
+
+  const answeredThisRound = agents.filter((agentId) =>
+    Boolean(db.prepare(
+      "SELECT 1 FROM results WHERE agent_id = ? AND workunit_id = ? AND submitted_at >= ?",
+    ).get(agentId, wuId, roundStartedAt)),
+  ).length;
+
+  if (answeredThisRound < agents.length && !deadlinePassed) return;
+
+  // Gather current-round submissions for aggregate computation.
+  const questions = (JSON.parse(wu.payload_json as string) as { questions: Question[] }).questions;
+  const roundResults = (db.prepare(
+    "SELECT agent_id, payload_json FROM results WHERE workunit_id = ? AND submitted_at >= ?",
+  ).all(wuId, roundStartedAt) as { agent_id: string; payload_json: string }[]).map((r) => ({
+    agent_id: r.agent_id,
+    answers: (JSON.parse(r.payload_json) as { answers: Answer[] }).answers,
+  }));
+
+  const aggregate = interimRoundAggregate(roundResults, questions);
+  const existingAggregates = wu.round_aggregates_json
+    ? (JSON.parse(wu.round_aggregates_json as string) as unknown[])
+    : [];
+  existingAggregates.push({ round: currentRound, aggregate });
+
+  if (currentRound >= rounds) {
+    // Final round — compute swarm consensus and move to resolving.
+    const consensus = finalRoundConsensus(roundResults, questions);
+    db.prepare(
+      `UPDATE workunits
+       SET current_round = ?, round_aggregates_json = ?, consensus_json = ?, status = 'resolving'
+       WHERE workunit_id = ?`,
+    ).run(currentRound + 1, JSON.stringify(existingAggregates), JSON.stringify(consensus), wuId);
+  } else {
+    // Advance to next round; compute per-round deadline from current window.
+    const nextRound = currentRound + 1;
+    const windowMs = roundClosesAt
+      ? new Date(roundClosesAt).getTime() - new Date(roundStartedAt).getTime()
+      : null;
+    const nextRoundClosesAt = windowMs ? new Date(Date.now() + windowMs).toISOString() : null;
+    db.prepare(
+      `UPDATE workunits
+       SET current_round = ?, round_started_at = ?, round_closes_at = ?, round_aggregates_json = ?
+       WHERE workunit_id = ?`,
+    ).run(nextRound, now, nextRoundClosesAt, JSON.stringify(existingAggregates), wuId);
+  }
 }
 
 export function buildApp(db: DatabaseSync): FastifyInstance {
@@ -141,33 +214,79 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
 
   app.get("/v1/work", async (req, reply) => {
     const agentId = String((req.query as Record<string, unknown>).agent_id ?? "");
-    if (!db.prepare("SELECT 1 FROM agents WHERE agent_id = ?").get(agentId)) {
-      return err(reply, 404, "UNKNOWN_AGENT", "agent not registered");
-    }
+    const agentRow = db.prepare("SELECT capabilities_json FROM agents WHERE agent_id = ?").get(agentId) as
+      | { capabilities_json: string } | undefined;
+    if (!agentRow) return err(reply, 404, "UNKNOWN_AGENT", "agent not registered");
+    const agentCaps = new Set(JSON.parse(agentRow.capabilities_json) as string[]);
     const now = new Date().toISOString();
     const rows = db.prepare(
       `SELECT w.* FROM workunits w
        JOIN subscriptions s ON s.mission_id = w.mission_id AND s.agent_id = ? AND s.enabled = 1
        WHERE w.status = 'open' AND w.closes_at > ?`,
-    ).all(agentId, now) as Record<string, string>[];
-    logEvent(db, "work_pulled", { ip: req.ip, agent_id: agentId, payload: { n: rows.length } });
+    ).all(agentId, now) as Record<string, unknown>[];
 
-    const tasks: Task[] = rows.map((w) => {
-      const manifest = getManifest(db, w.mission_id)!;
-      const submitted = Boolean(db.prepare("SELECT 1 FROM results WHERE agent_id = ? AND workunit_id = ?").get(agentId, w.workunit_id));
-      return {
-        task_id: `t_${w.workunit_id}`,
-        mission_id: w.mission_id,
-        workunit_id: w.workunit_id,
+    // Lazily advance any round whose deadline has passed before returning work.
+    for (const w of rows) maybeAdvanceRound(db, w);
+
+    // Re-fetch after potential round advancement (status may have changed).
+    const freshRows = db.prepare(
+      `SELECT w.* FROM workunits w
+       JOIN subscriptions s ON s.mission_id = w.mission_id AND s.agent_id = ? AND s.enabled = 1
+       WHERE w.status = 'open' AND w.closes_at > ?`,
+    ).all(agentId, now) as Record<string, unknown>[];
+
+    logEvent(db, "work_pulled", { ip: req.ip, agent_id: agentId, payload: { n: freshRows.length } });
+
+    const tasks: Task[] = [];
+    for (const w of freshRows) {
+      const manifest = getManifest(db, w.mission_id as string)!;
+      // capability gate (the skill interface): an agent only receives work whose
+      // mission requires capabilities it has declared. New skills/missions become
+      // available simply by agents advertising the matching capability.
+      if (!(manifest.capabilities ?? []).every((c) => agentCaps.has(c))) continue;
+
+      const workunitId = w.workunit_id as string;
+      const rounds = Number(w.rounds ?? 1);
+      const currentRound = Number(w.current_round ?? 1);
+      const roundStartedAt = (w.round_started_at as string | null) ?? (w.published_at as string);
+
+      // An agent has submitted for the current round if their result was stored
+      // after the round opened (agents re-answer each round; prior-round answers
+      // are replaced via the UNIQUE (agent_id, workunit_id) constraint).
+      const submittedThisRound = Boolean(
+        db.prepare(
+          "SELECT 1 FROM results WHERE agent_id = ? AND workunit_id = ? AND submitted_at >= ?",
+        ).get(agentId, workunitId, roundStartedAt),
+      );
+
+      // Attach round context and the swarm's current leaning so agents can
+      // reconsider in round 2+. Included only for multi-round workunits.
+      const roundInfo = rounds > 1 ? {
+        current_round: currentRound,
+        total_rounds: rounds,
+        round_closes_at: (w.round_closes_at as string | null) ?? null,
+        round_leaning: (() => {
+          const prev = w.round_aggregates_json
+            ? (JSON.parse(w.round_aggregates_json as string) as { round: number; aggregate: unknown }[])
+            : [];
+          return prev.length > 0 ? prev[prev.length - 1].aggregate : null;
+        })(),
+      } : undefined;
+
+      tasks.push({
+        task_id: `t_${workunitId}`,
+        mission_id: w.mission_id as string,
+        workunit_id: workunitId,
         pattern: manifest.pattern,
         verification: manifest.verification.mode,
-        payload: JSON.parse(w.payload_json),
+        payload: JSON.parse(w.payload_json as string),
         prompt_template_version: `${manifest.id}/prompts@${manifest.version}`,
-        deadline: w.closes_at,
+        deadline: w.closes_at as string,
         points_base: manifest.points.base,
-        already_submitted: submitted,
-      };
-    });
+        already_submitted: submittedThisRound,
+        ...(roundInfo ? { round: roundInfo } : {}),
+      } as Task & { round?: typeof roundInfo });
+    }
     return { tasks };
   });
 
@@ -216,7 +335,19 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
       ).run(String(b.agent_id), workunitId, JSON.stringify(b.payload), String(b.template_version ?? ""), now);
     }
     logEvent(db, "result_submitted", { ip: req.ip, agent_id: String(b.agent_id), payload: { workunit_id: workunitId, replaced: Boolean(prev) } });
-    return { accepted: true, replaced: Boolean(prev), scoring_at: wu.resolve_at };
+
+    // Check whether this submission completes the current round.
+    const freshWu = db.prepare("SELECT * FROM workunits WHERE workunit_id = ?").get(workunitId) as Record<string, unknown>;
+    maybeAdvanceRound(db, freshWu);
+    const wuAfter = db.prepare("SELECT current_round, rounds FROM workunits WHERE workunit_id = ?").get(workunitId) as
+      { current_round: number; rounds: number };
+
+    return {
+      accepted: true,
+      replaced: Boolean(prev),
+      scoring_at: wu.resolve_at,
+      ...(Number(wuAfter.rounds) > 1 ? { current_round: wuAfter.current_round, total_rounds: wuAfter.rounds } : {}),
+    };
   });
 
   app.get("/v1/agents/:agent_id", async (req, reply) => {

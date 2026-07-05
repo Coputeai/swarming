@@ -15,6 +15,7 @@ import { API_BASE, configDir, ensureSwarmingMd, loadIdentity, loadOrCreateKeypai
 import { api, ApiError } from "./api.ts";
 import { detectModel } from "./model.ts";
 import { answerTask } from "./predict.ts";
+import { fetchContext } from "./tools.ts";
 import { scheduleDaily } from "./schedule.ts";
 
 const BEE = "\u{1F41D}";
@@ -69,7 +70,7 @@ then re-run: swarming join`);
 
   const ts = nowTs();
   const pubkeyB64 = publicKeyRaw.toString("base64");
-  const capabilities = ["llm.reasoning"];
+  const capabilities = ["llm.reasoning", "data.read"];
   const sig = signPayload({ capabilities, model_class: backend.model_class, pubkey: pubkeyB64, ts }, privateSeed);
   const reg = (await api.post("/v1/agents/register", {
     protocol_version: PROTOCOL_VERSION, pubkey: pubkeyB64, model_class: backend.model_class, capabilities, ts, sig,
@@ -119,6 +120,12 @@ async function pullAnswerSubmit(agentId: string, name: string, privateSeed: Buff
   for (const task of tasks) {
     if (task.already_submitted && !force) continue;
     console.log(`${BEE} ${task.mission_id} — ${task.payload.questions.length} question(s), closes ${task.deadline}`);
+    // data.read: fetch live context from declared sources and inject it for the model to reason over.
+    const context = await fetchContext(task);
+    if (context) {
+      (task as Task & { context?: string }).context = context;
+      console.log(`   data.read: fetched live context for ${context.split("\n").length} source(s)`);
+    }
     const answers = await answerTask(task, name, swarmingMd, backend);
     const payload = { answers };
     const ts = nowTs();

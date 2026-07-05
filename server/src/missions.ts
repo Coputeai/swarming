@@ -12,7 +12,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const MISSIONS_DIR = process.env.SWARMING_MISSIONS_DIR ?? join(here, "..", "..", "missions");
 
 export const GENERATOR_WHITELIST = ["question-slate"] as const;
-export const RESOLVER_WHITELIST = ["coingecko-close", "binance-close", "manual-dev"] as const;
+export const RESOLVER_WHITELIST = ["coingecko-close", "binance-close", "manual-dev", "quorum-self"] as const;
 
 export interface MissionManifest {
   id: string;

@@ -16,6 +16,13 @@ import {
   pointsFor,
   consensusWeight,
   tierIndexFor,
+  answerDistance,
+  diversityMultipliers,
+  crossInhibitionConsensus,
+  interimRoundAggregate,
+  finalRoundConsensus,
+  type Answer,
+  type Question,
 } from "../src/index.ts";
 
 test("jcs: sorts keys recursively, no whitespace", () => {
@@ -88,4 +95,145 @@ test("scoring: golden values", () => {
 test("scoring: brier rejects out-of-range probability", () => {
   assert.throws(() => brierBinary(1.2, 1));
   assert.throws(() => brierBinary(-0.1, 0));
+});
+
+test("diversity: answer distance (binary + choice)", () => {
+  const qs: Question[] = [
+    { q_id: "a", type: "binary", text: "", resolution: { source: "x", rule: "y", resolve_at: "z" } },
+    { q_id: "b", type: "choice", text: "", choices: ["X", "Y"], resolution: { source: "x", rule: "y", resolve_at: "z" } },
+  ];
+  const mk = (p: number, c: string): Answer[] => [
+    { q_id: "a", p, rationale: "" },
+    { q_id: "b", choice: c, rationale: "" },
+  ];
+  assert.equal(answerDistance(mk(0.8, "X"), mk(0.8, "X"), qs), 0); // identical
+  // |0.8-0.6|=0.2 on a, choice differs=1 on b → mean 0.6
+  assert.ok(Math.abs(answerDistance(mk(0.8, "X"), mk(0.6, "Y"), qs) - 0.6) < 1e-12);
+  // missing answer = maximally distant
+  assert.equal(answerDistance([{ q_id: "a", p: 0.8, rationale: "" }], mk(0.8, "X"), qs), 0.5);
+});
+
+test("diversity: clusters split weight, lone voices keep it", () => {
+  // 3 questions — the minimum slate where clustering is meaningful
+  const qs: Question[] = ["a", "b", "c"].map((id) => (
+    { q_id: id, type: "binary", text: "", resolution: { source: "x", rule: "y", resolve_at: "z" } } as Question
+  ));
+  const sub = (id: string, p: number) => ({ agent_id: id, answers: qs.map((q) => ({ q_id: q.q_id, p, rationale: "" })) });
+  // three identical sybils + one distinct voice
+  const m = diversityMultipliers(
+    [sub("s1", 0.9), sub("s2", 0.9), sub("s3", 0.9), sub("lone", 0.1)],
+    qs,
+  );
+  assert.ok(Math.abs(m.get("s1")! - 1 / 3) < 1e-12);
+  assert.ok(Math.abs(m.get("s2")! - 1 / 3) < 1e-12);
+  assert.ok(Math.abs(m.get("s3")! - 1 / 3) < 1e-12);
+  assert.equal(m.get("lone"), 1);
+
+  // within-epsilon herders merge; clearly-different stay separate
+  const m2 = diversityMultipliers([sub("h1", 0.90), sub("h2", 0.93), sub("indep", 0.40)], qs);
+  assert.ok(Math.abs(m2.get("h1")! - 0.5) < 1e-12); // 0.03 <= epsilon → paired
+  assert.ok(Math.abs(m2.get("h2")! - 0.5) < 1e-12);
+  assert.equal(m2.get("indep"), 1);
+});
+
+test("diversity: no clustering below MIN_QUESTIONS_FOR_DIVERSITY", () => {
+  // On a 1-question slate, picking the same option is not collusion evidence —
+  // discounting it would make any 3-1 majority cancel to a dead tie.
+  const qs: Question[] = [
+    { q_id: "m", type: "choice", text: "", choices: ["X", "Y"], resolution: { source: "x", rule: "y", resolve_at: "z" } },
+  ];
+  const sub = (id: string, c: string) => ({ agent_id: id, answers: [{ q_id: "m", choice: c, rationale: "" }] });
+  const m = diversityMultipliers([sub("a1", "X"), sub("a2", "X"), sub("a3", "X"), sub("a4", "Y")], qs);
+  for (const id of ["a1", "a2", "a3", "a4"]) assert.equal(m.get(id), 1);
+});
+
+test("consensus: commits to a clear winner with high confidence", () => {
+  const r = crossInhibitionConsensus([{ id: "A", support: 10 }, { id: "B", support: 2 }]);
+  assert.equal(r.choice, "A");
+  assert.ok(r.committed);
+  assert.ok(r.confidence > 0.6); // well past the quorum threshold
+});
+
+test("consensus: picks the stronger side and sharpens a near-tie", () => {
+  const r = crossInhibitionConsensus([{ id: "A", support: 11 }, { id: "B", support: 9 }]);
+  assert.equal(r.choice, "A");
+  assert.ok(r.distribution.A > r.distribution.B);
+  // cross-inhibition amplifies the lead beyond the raw 11/20 = 0.55 input share
+  const shareA = r.distribution.A / (r.distribution.A + r.distribution.B);
+  assert.ok(shareA > 0.55);
+});
+
+test("consensus: abstains (no commit) on a perfect deadlock", () => {
+  const r = crossInhibitionConsensus([{ id: "A", support: 5 }, { id: "B", support: 5 }]);
+  assert.ok(!r.committed);
+});
+
+test("consensus: defensive on empty and zero/NaN support", () => {
+  assert.equal(crossInhibitionConsensus([]).choice, null);
+  const z = crossInhibitionConsensus([{ id: "A", support: 0 }, { id: "B", support: NaN }]);
+  assert.ok(!z.committed);
+  assert.equal(z.confidence, 0);
+});
+
+// --- Deliberation round helpers -----------------------------------------------
+
+const deliberationQs: Question[] = [
+  { q_id: "bin1", type: "binary", text: "?", resolution: { source: "x", rule: "y", resolve_at: "z" } },
+  { q_id: "ch1", type: "choice", text: "?", choices: ["A", "B", "C"], resolution: { source: "x", rule: "y", resolve_at: "z" } },
+];
+
+test("interimRoundAggregate: binary mean + choice vote share", () => {
+  const subs = [
+    { agent_id: "a1", answers: [{ q_id: "bin1", p: 0.8, rationale: "" }, { q_id: "ch1", choice: "A", rationale: "" }] },
+    { agent_id: "a2", answers: [{ q_id: "bin1", p: 0.6, rationale: "" }, { q_id: "ch1", choice: "B", rationale: "" }] },
+  ];
+  const agg = interimRoundAggregate(subs, deliberationQs);
+  // equal diversity weights → simple mean for binary
+  const bin = agg["bin1"] as { yes: number | null };
+  assert.ok(Math.abs(bin.yes! - 0.7) < 1e-10);
+  // each choice gets 50%
+  const ch = agg["ch1"] as { top: [string, number][] };
+  assert.equal(ch.top.length, 2);
+  assert.ok(ch.top.every(([, share]) => Math.abs(share - 0.5) < 1e-10));
+});
+
+test("interimRoundAggregate: empty submissions returns empty object", () => {
+  assert.deepEqual(interimRoundAggregate([], deliberationQs), {});
+});
+
+test("interimRoundAggregate: diversity-discounts duplicate answers", () => {
+  // two identical agents cluster → each gets weight 0.5; distinct agent keeps 1
+  const subs = [
+    { agent_id: "s1", answers: [{ q_id: "bin1", p: 0.9, rationale: "" }, { q_id: "ch1", choice: "A", rationale: "" }] },
+    { agent_id: "s2", answers: [{ q_id: "bin1", p: 0.9, rationale: "" }, { q_id: "ch1", choice: "A", rationale: "" }] },
+    { agent_id: "lone", answers: [{ q_id: "bin1", p: 0.1, rationale: "" }, { q_id: "ch1", choice: "B", rationale: "" }] },
+  ];
+  const agg = interimRoundAggregate(subs, deliberationQs);
+  // sybils contribute total weight 0.5+0.5=1, lone contributes 1 → mean = (1*0.9 + 1*0.1)/2 = 0.5
+  const bin = agg["bin1"] as { yes: number | null };
+  assert.ok(Math.abs(bin.yes! - 0.5) < 1e-10);
+});
+
+test("finalRoundConsensus: committed call on clear binary winner", () => {
+  const subs = [
+    { agent_id: "a1", answers: [{ q_id: "bin1", p: 0.95, rationale: "" }, { q_id: "ch1", choice: "A", rationale: "" }] },
+    { agent_id: "a2", answers: [{ q_id: "bin1", p: 0.90, rationale: "" }, { q_id: "ch1", choice: "A", rationale: "" }] },
+    { agent_id: "a3", answers: [{ q_id: "bin1", p: 0.85, rationale: "" }, { q_id: "ch1", choice: "A", rationale: "" }] },
+  ];
+  const con = finalRoundConsensus(subs, deliberationQs);
+  assert.equal(con["bin1"].decision, 1);  // strong yes
+  assert.ok(con["bin1"].committed);
+  assert.equal(con["ch1"].decision, "A");
+  assert.ok(con["ch1"].committed);
+});
+
+test("finalRoundConsensus: plurality fallback on deadlock", () => {
+  const subs = [
+    { agent_id: "a1", answers: [{ q_id: "bin1", p: 0.5, rationale: "" }, { q_id: "ch1", choice: "A", rationale: "" }] },
+    { agent_id: "a2", answers: [{ q_id: "bin1", p: 0.5, rationale: "" }, { q_id: "ch1", choice: "B", rationale: "" }] },
+  ];
+  const con = finalRoundConsensus(subs, deliberationQs);
+  // binary deadlock: p(yes)=p(no)=0.5 → not committed, decision by plurality (yes >= no → 1)
+  assert.ok(!con["bin1"].committed);
+  assert.equal(con["bin1"].decision, 1); // 0.5 >= 0.5 → yes wins tie
 });

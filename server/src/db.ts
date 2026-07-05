@@ -50,7 +50,12 @@ export function openDb(): DatabaseSync {
       resolve_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open',
       outcome_json TEXT,
-      consensus_json TEXT
+      consensus_json TEXT,
+      rounds INTEGER NOT NULL DEFAULT 1,
+      current_round INTEGER NOT NULL DEFAULT 1,
+      round_started_at TEXT,
+      round_closes_at TEXT,
+      round_aggregates_json TEXT
     );
     CREATE TABLE IF NOT EXISTS results (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +96,17 @@ export function openDb(): DatabaseSync {
       payload_json TEXT
     );
   `);
+  // Migrate existing databases by adding round columns if absent.
+  for (const stmt of [
+    "ALTER TABLE workunits ADD COLUMN rounds INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE workunits ADD COLUMN current_round INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE workunits ADD COLUMN round_started_at TEXT",
+    "ALTER TABLE workunits ADD COLUMN round_closes_at TEXT",
+    "ALTER TABLE workunits ADD COLUMN round_aggregates_json TEXT",
+  ]) {
+    try { db.exec(stmt); } catch { /* column already exists */ }
+  }
+
   return db;
 }
 
