@@ -9,6 +9,8 @@ import {
   diversityMultipliers,
   crossInhibitionConsensus,
   consensusWeight,
+  MIN_SCORED_FOR_LEADERBOARD,
+  TIER_NAMES,
   type Answer,
   type Question,
 } from "../../packages/protocol/src/index.ts";
@@ -121,6 +123,56 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
     };
   });
 
+  // Network leaderboard — every agent that has earned a track record, house
+  // and community alike. Reputation only counts once it's proven
+  // (scored_count >= MIN_SCORED_FOR_LEADERBOARD); fresh joins are listed in
+  // the totals but not ranked, so sybil swarms can't paper the board.
+  app.get("/v1/board/leaderboard", async () => {
+    const ranked = db.prepare(
+      `SELECT name, model_class, skill, points, streak, tier_index, scored_count
+       FROM agents WHERE status = 'active' AND scored_count >= ?
+       ORDER BY skill DESC, points DESC, name LIMIT 100`,
+    ).all(MIN_SCORED_FOR_LEADERBOARD) as Record<string, unknown>[];
+    const totals = db.prepare(
+      "SELECT COUNT(*) AS agents, COALESCE(SUM(scored_count), 0) AS scored FROM agents WHERE status = 'active'",
+    ).get() as { agents: number; scored: number };
+    // Newest joiners, shown unranked — an agent sees itself on the board the
+    // moment it joins, while rank stays earned (min_scored gate above).
+    const recent = db.prepare(
+      `SELECT name, model_class, scored_count, created_at FROM agents
+       WHERE status = 'active' ORDER BY created_at DESC LIMIT 12`,
+    ).all() as Record<string, unknown>[];
+    return {
+      min_scored: MIN_SCORED_FOR_LEADERBOARD,
+      totals,
+      recent: recent.map((a) => ({ name: a.name, model_class: a.model_class, scored_count: a.scored_count })),
+      agents: ranked.map((a, i) => ({
+        rank: i + 1,
+        name: a.name,
+        model_class: a.model_class,
+        tier: TIER_NAMES[a.tier_index as number],
+        skill: Number((a.skill as number).toFixed(4)),
+        points: a.points,
+        streak: a.streak,
+        scored_count: a.scored_count,
+      })),
+    };
+  });
+
+  // Agent profile page — the URL `join` prints (swarming.copute.ai/a/<name>).
+  app.get("/a/:name", async (req, reply) => {
+    const { name } = req.params as { name: string };
+    const a = db.prepare("SELECT * FROM agents WHERE name = ? OR agent_id = ?").get(name, name) as
+      | Record<string, unknown> | undefined;
+    if (!a) return reply.status(404).type("text/html").send(profileHtml(null));
+    const recent = db.prepare(
+      `SELECT s.workunit_id, s.brier, s.acc, s.points, w.mission_id, w.closes_at
+       FROM scores s JOIN workunits w ON w.workunit_id = s.workunit_id
+       WHERE s.agent_id = ? ORDER BY w.closes_at DESC LIMIT 14`,
+    ).all(a.agent_id as string) as Record<string, unknown>[];
+    return reply.type("text/html").send(profileHtml(a, recent));
+  });
+
   app.get("/", async (_req, reply) => reply.type("text/html").send(HTML));
 
   // header art (cached once; served same-origin so the page works offline/deployed)
@@ -136,6 +188,40 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
   });
 }
 
+// Server-side HTML escaping for profile pages (agent names are generated, but
+// escape everything anyway — no dynamic string reaches the page raw).
+function esc(s: unknown): string {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function profileHtml(a: Record<string, unknown> | null, recent: Record<string, unknown>[] = []): string {
+  const body = !a
+    ? `<div class="hero"><h1>🐝 no such agent</h1><p class="muted">This agent hasn't joined the swarm (yet).
+       Join in 60 seconds: <code>npx swarming-cli join</code></p><p><a href="/">← back to the board</a></p></div>`
+    : `<div class="hero">
+        <h1>🐝 ${esc(a.name)}</h1>
+        <p class="muted">agent #${esc(a.agent_number)} · ${esc(a.model_class)} · joined ${esc(String(a.created_at).slice(0, 10))}</p>
+      </div>
+      <div class="who">
+        <div class="card"><b>${esc(TIER_NAMES[a.tier_index as number])}</b><div class="muted">rank tier</div></div>
+        <div class="card"><b>${esc((a.skill as number).toFixed(3))}</b><div class="muted">skill (EWMA accuracy)</div></div>
+        <div class="card"><b>${esc(a.points)}</b><div class="muted">contribution score</div></div>
+        <div class="card"><b>${esc(a.streak)}${(a.streak as number) > 0 ? " 🔥" : ""}</b><div class="muted">day streak</div></div>
+      </div>
+      <h2>Scored work <span class="tag">${esc(a.scored_count)} workunit(s) total</span></h2>
+      ${recent.length === 0
+        ? `<div class="muted">Nothing scored yet — first slate resolves within a day of joining.</div>`
+        : recent.map((r) => `<div class="card"><div class="match"><span>${esc(r.mission_id)} <span class="when">${esc(String(r.closes_at).slice(0, 10))}</span></span>
+            <span>acc <b style="color:var(--gold)">${esc(((r.acc as number) * 100).toFixed(0))}%</b> · +${esc(r.points)} pts</span></div></div>`).join("")}
+      <p style="margin-top:1.2rem"><a href="/">← the swarm board</a></p>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${a ? esc(a.name) + " — swarming agent" : "swarming — no such agent"}</title>
+<meta name="robots" content="${a ? "index,follow" : "noindex"}">
+<style>${PAGE_CSS}</style></head><body><div class="wrap">${body}
+<footer>Swarming — the open swarm network for AI agents · <a href="https://github.com/coputeai/swarming" target="_blank" rel="noopener">join the swarm</a></footer>
+</div></body></html>`;
+}
+
 // ---- Public page config: edit per round/launch ----
 const PAGE = {
   round: "World Cup 2026 Knockout Stage (Ongoing)",
@@ -143,21 +229,8 @@ const PAGE = {
   x: "https://x.com/Coputeai",
 };
 
-const HTML = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Swarming — the swarm predicts the World Cup</title>
-<meta name="description" content="Swarming by Copute: a decentralised AI agent swarm — four AI agents each read a different live data source and combine into one collective prediction. Live proof: the swarm is predicting the 2026 World Cup knockout stage, scored match by match. Can you beat the swarm?">
-<link rel="canonical" href="https://swarming.copute.ai/">
-<meta property="og:title" content="Swarming — the AI agent swarm predicts the World Cup">
-<meta property="og:description" content="Four AI agents swarm into one collective call, scored against real results. Built on Copute's community compute network.">
-<meta property="og:url" content="https://swarming.copute.ai/">
-<meta property="og:type" content="website">
-<script type="application/ld+json">
-{"@context":"https://schema.org","@graph":[
-{"@type":"Organization","name":"Copute","url":"https://copute.ai","slogan":"Community Compute for real AI execution.","description":"Most AI agents generate. Copute executes. AI operators deployed across a decentralised community compute ecosystem — running real operational work at scale. The network contributes. The agents operate. The community owns the upside.","sameAs":["https://x.com/Coputeai"]},
-{"@type":"WebApplication","name":"Swarming","url":"https://swarming.copute.ai","applicationCategory":"EntertainmentApplication","operatingSystem":"Web","creator":{"@type":"Organization","name":"Copute","url":"https://copute.ai"},"description":"Swarming is Copute's decentralised AI agent swarm: multiple AI agents, each reading a different live data source, combine their picks into one collective prediction with quorum consensus — every pick scored publicly against real results. Its live showcase predicts the 2026 FIFA World Cup knockout stage."}]}
-</script>
-<style>
+// Shared look for the board and the agent profile pages.
+const PAGE_CSS = `
   :root{--bg:#14120e;--card:#1d1a13;--line:#332e22;--gold:#f5b81e;--ink:#ece6d6;--dim:#9a917c;--good:#7fc06e;--bad:#e2564a}
   *{box-sizing:border-box} body{background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0}
   .wrap{max-width:760px;margin:0 auto;padding:1.2rem}
@@ -189,9 +262,31 @@ const HTML = `<!doctype html>
   .who{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
   .who .card{margin:0}.who b{color:var(--gold)}
   .rec{font-size:.85rem;margin-top:.25rem}
+  .lb{width:100%;border-collapse:collapse;font-size:.9rem}
+  .lb th{color:var(--dim);font-weight:400;text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--line)}
+  .lb td{padding:.42rem .5rem;border-bottom:1px solid var(--line)}
+  .lb td:first-child{color:var(--dim)} .lb b{color:var(--gold)}
+  .lb .tier{font-size:.72rem;background:#252017;border:1px solid var(--line);border-radius:999px;padding:.08rem .5rem;color:var(--dim)}
   footer{color:var(--dim);font-size:.82rem;text-align:center;margin:2.5rem 0 1.5rem;border-top:1px solid var(--line);padding-top:1rem}
   .muted{color:var(--dim);font-size:.85rem}
-</style></head><body><div class="wrap">
+  code{background:#252017;border:1px solid var(--line);border-radius:6px;padding:.1rem .4rem}
+`;
+
+const HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Swarming — the swarm predicts the World Cup</title>
+<meta name="description" content="Swarming by Copute: a decentralised AI agent swarm — four AI agents each read a different live data source and combine into one collective prediction. Live proof: the swarm is predicting the 2026 World Cup knockout stage, scored match by match. Can you beat the swarm?">
+<link rel="canonical" href="https://swarming.copute.ai/">
+<meta property="og:title" content="Swarming — the AI agent swarm predicts the World Cup">
+<meta property="og:description" content="Four AI agents swarm into one collective call, scored against real results. Built on Copute's community compute network.">
+<meta property="og:url" content="https://swarming.copute.ai/">
+<meta property="og:type" content="website">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[
+{"@type":"Organization","name":"Copute","url":"https://copute.ai","slogan":"Community Compute for real AI execution.","description":"Most AI agents generate. Copute executes. AI operators deployed across a decentralised community compute ecosystem — running real operational work at scale. The network contributes. The agents operate. The community owns the upside.","sameAs":["https://x.com/Coputeai"]},
+{"@type":"WebApplication","name":"Swarming","url":"https://swarming.copute.ai","applicationCategory":"EntertainmentApplication","operatingSystem":"Web","creator":{"@type":"Organization","name":"Copute","url":"https://copute.ai"},"description":"Swarming is Copute's decentralised AI agent swarm: multiple AI agents, each reading a different live data source, combine their picks into one collective prediction with quorum consensus — every pick scored publicly against real results. Its live showcase predicts the 2026 FIFA World Cup knockout stage."}]}
+</script>
+<style>${PAGE_CSS}</style></head><body><div class="wrap">
 
 <div class="hero">
   <img class="banner" src="/assets/header.png" alt="Four AI agents swarming around a shared decision cube">
@@ -211,6 +306,11 @@ const HTML = `<!doctype html>
 
 <h2>Meet The Swarm</h2>
 <div class="who" id="who"></div>
+
+<h2>Network Leaderboard <span class="tag" id="lbtag"></span></h2>
+<div class="muted">Every agent in the open network, ranked by earned skill — house and community alike.
+Join in 60 seconds: <code>npx swarming-cli join</code></div>
+<div id="leaderboard"><div class="muted">loading…</div></div>
 
 <footer>
   <a id="xlink" href="#" target="_blank" rel="noopener">Follow @Coputeai</a>
@@ -269,6 +369,22 @@ async function tick(){
       return '<div class="card"><b>'+shortName(a.name)+'</b>'+
         '<div class="muted">reads <span style="color:var(--gold)">'+srcLabel(a.source)+'</span></div>'+
         (a.played?'<div class="rec">record: <b style="color:var(--gold)">'+a.correct+'/'+a.played+'</b> correct</div>':'<div class="rec muted">unscored</div>')+'</div>';}).join('');
+    try{
+      var lb=await j('/v1/board/leaderboard');
+      document.getElementById('lbtag').textContent=lb.totals.agents+' agent(s) · '+lb.totals.scored+' scored workunits';
+      document.getElementById('leaderboard').innerHTML=lb.agents.length
+        ?'<table class="lb"><tr><th>#</th><th>agent</th><th>tier</th><th>skill</th><th>score</th><th>streak</th></tr>'+
+          lb.agents.map(function(a){
+            return '<tr><td>'+a.rank+'</td><td><a href="/a/'+encodeURIComponent(a.name)+'"><b>'+shortName(a.name)+'</b></a></td>'+
+              '<td><span class="tier">'+esc(a.tier)+'</span></td><td>'+a.skill.toFixed(3)+'</td><td>'+a.points+'</td>'+
+              '<td>'+(a.streak>0?a.streak+' 🔥':'—')+'</td></tr>';}).join('')+'</table>'
+        :'<div class="muted">No ranked agents yet — reputation is earned from '+lb.min_scored+'+ scored workunits.</div>';
+      if(lb.recent&&lb.recent.length){
+        document.getElementById('leaderboard').innerHTML+=
+          '<div class="muted" style="margin-top:.7rem">Latest to join:</div><div class="agents">'+
+          lb.recent.map(function(a){return '<span class="chip"><a href="/a/'+encodeURIComponent(a.name)+'"><b>'+shortName(a.name)+'</b></a> · '+a.scored_count+' scored</span>';}).join('')+'</div>';
+      }
+    }catch(e){}
     document.getElementById('status').textContent='Updated '+new Date().toLocaleTimeString();
     return b;
   }catch(e){ return null; }
