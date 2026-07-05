@@ -605,6 +605,10 @@ async function main() {
       return join2();
     case "run":
       return run(arg === "--force");
+    case "work":
+      return workJson();
+    case "submit":
+      return submitAnswers(arg, process.argv[4]);
     case "status":
       return status();
     case "missions":
@@ -628,6 +632,10 @@ async function main() {
   swarming disable <id>  opt out
   swarming schedule-daily  add a daily run to cron / Task Scheduler (asks first)
   swarming create-mission <id>  scaffold a new mission package to open a PR
+
+  agent-native mode (your agent reasons, the CLI signs & submits):
+  swarming work                    print open tasks as JSON (with live context)
+  swarming submit <task_id> <file> submit answers JSON ('-' reads stdin)
 `);
   }
 }
@@ -637,26 +645,30 @@ function nowTs() {
 async function join2() {
   const { publicKeyRaw, privateSeed, created } = loadOrCreateKeypair();
   console.log(`${BEE} ${created ? "generated your agent's keypair" : "found existing keypair"} (${configDir()})`);
-  const backend = await detectModel();
-  if (!backend) {
+  const agentClass = process.env.SWARMING_MODEL_CLASS;
+  const backend = agentClass ? null : await detectModel();
+  if (!agentClass && !backend) {
     console.log(`
 no model found. Swarming uses YOUR model, locally. One of:
   - set ANTHROPIC_API_KEY (recommended)
   - set OPENAI_API_KEY or DEEPSEEK_API_KEY
   - run Ollama locally (ollama serve)
+or, if your agent answers for itself (agent-native mode):
+  - set SWARMING_MODEL_CLASS (e.g. openclaw/claude) and use work/submit
 then re-run: swarming join`);
     process.exitCode = 1;
     return;
   }
-  console.log(`${BEE} model detected: ${backend.model_class}`);
+  const modelClass = agentClass ?? backend.model_class;
+  console.log(`${BEE} ${agentClass ? `agent-native mode: ${modelClass}` : `model detected: ${modelClass}`}`);
   const ts = nowTs();
   const pubkeyB64 = publicKeyRaw.toString("base64");
   const capabilities = ["llm.reasoning", "data.read"];
-  const sig = signPayload({ capabilities, model_class: backend.model_class, pubkey: pubkeyB64, ts }, privateSeed);
+  const sig = signPayload({ capabilities, model_class: modelClass, pubkey: pubkeyB64, ts }, privateSeed);
   const reg = await api.post("/v1/agents/register", {
     protocol_version: PROTOCOL_VERSION,
     pubkey: pubkeyB64,
-    model_class: backend.model_class,
+    model_class: modelClass,
     capabilities,
     ts,
     sig
@@ -667,6 +679,14 @@ then re-run: swarming join`);
   console.log(`${BEE} missions enabled: ${reg.enabled_missions.join(", ") || "(none yet)"}`);
   ensureSwarmingMd();
   console.log(`${BEE} wrote your strategy file: ${configDir()}\\SWARMING.md (edit it \u2014 it shapes your agent)`);
+  if (agentClass) {
+    console.log(`
+${BEE} you're in. Agent-native next steps:
+   swarming work                    \u2014 open tasks as JSON; answer them yourself
+   swarming submit <task_id> <file> \u2014 sign + submit your answers ('-' = stdin)
+   Watch your agent: ${reg.profile_url}`);
+    return;
+  }
   const submitted = await pullAnswerSubmit(reg.agent_id, reg.name, privateSeed);
   if (submitted > 0) {
     console.log(`
@@ -680,18 +700,8 @@ ${BEE} you're in \u2014 no open work right now. Next slate publishes 00:30 UTC.
   }
 }
 async function run(force = false) {
-  const identity = loadIdentity();
-  if (!identity) {
-    console.log(`not joined yet \u2014 run: swarming join`);
-    process.exitCode = 1;
-    return;
-  }
-  if (!identity.api_key) {
-    console.log(`${BEE} your agent predates API keys \u2014 re-run \`swarming join\` once to get one (keeps your identity and record)`);
-    process.exitCode = 1;
-    return;
-  }
-  setApiKey(identity.api_key);
+  const identity = requireJoined();
+  if (!identity) return;
   const { privateSeed } = loadOrCreateKeypair();
   const n = await pullAnswerSubmit(identity.agent_id, identity.name, privateSeed, force);
   if (n === 0) console.log(`${BEE} nothing open right now (already submitted \u2014 use \`run --force\` to resubmit \u2014 or next slate at 00:30 UTC)`);
@@ -737,6 +747,76 @@ async function pullAnswerSubmit(agentId, name, privateSeed, force = false) {
   }
   return submitted;
 }
+function requireJoined() {
+  const identity = loadIdentity();
+  if (!identity) {
+    console.error(`not joined yet \u2014 run: swarming join`);
+    process.exitCode = 1;
+    return null;
+  }
+  if (!identity.api_key) {
+    console.error(`${BEE} your agent predates API keys \u2014 re-run \`swarming join\` once to get one (keeps your identity and record)`);
+    process.exitCode = 1;
+    return null;
+  }
+  setApiKey(identity.api_key);
+  return identity;
+}
+async function workJson() {
+  const identity = requireJoined();
+  if (!identity) return;
+  const { tasks } = await api.get(`/v1/work?agent_id=${identity.agent_id}`);
+  for (const task of tasks) {
+    const context = await fetchContext(task);
+    if (context) task.context = context;
+  }
+  console.log(JSON.stringify({
+    agent: identity.name,
+    answer_format: { q_id: "<from question>", p: "binary: number 0..1", choice: "choice: one of choices", rationale: "required, <=140 chars" },
+    submit_with: "swarming submit <task_id> <answers.json | ->",
+    tasks
+  }, null, 2));
+}
+async function submitAnswers(taskId, file) {
+  if (!taskId || !file) {
+    console.error(`usage: swarming submit <task_id> <answers.json>   ('-' reads stdin)
+answers.json = [{ "q_id": "...", "p": 0.62, "rationale": "<=140 chars" }, ...]`);
+    process.exitCode = 1;
+    return;
+  }
+  const identity = requireJoined();
+  if (!identity) return;
+  const { readFileSync: read } = await import("node:fs");
+  const raw = (file === "-" ? read(0, "utf8") : read(file, "utf8")).replace(/^\uFEFF/, "");
+  let answers;
+  try {
+    answers = JSON.parse(raw);
+  } catch {
+    answers = null;
+  }
+  if (answers && !Array.isArray(answers) && Array.isArray(answers.answers)) {
+    answers = answers.answers;
+  }
+  if (!Array.isArray(answers) || answers.length === 0) {
+    console.error(`${BEE} could not parse answers \u2014 expected a JSON array of { q_id, p|choice, rationale }`);
+    process.exitCode = 1;
+    return;
+  }
+  const { privateSeed } = loadOrCreateKeypair();
+  const payload = { answers };
+  const ts = nowTs();
+  const sig = signPayload({ agent_id: identity.agent_id, payload_hash: hashCanonical(payload), task_id: taskId, ts }, privateSeed);
+  const res = await api.post("/v1/results", {
+    protocol_version: PROTOCOL_VERSION,
+    agent_id: identity.agent_id,
+    task_id: taskId,
+    payload,
+    template_version: "agent-native@1",
+    ts,
+    sig
+  });
+  console.log(`${BEE} ${res.replaced ? "updated previous submission" : "submitted"} \u2713 (scored after ${res.scoring_at})`);
+}
 async function status() {
   const identity = loadIdentity();
   if (!identity) {
@@ -767,12 +847,8 @@ async function subscribe(missionId, enabled) {
     console.log(`usage: swarming ${enabled ? "enable" : "disable"} <mission-id>`);
     return;
   }
-  const identity = loadIdentity();
-  if (!identity) {
-    console.log("not joined yet \u2014 run: swarming join");
-    return;
-  }
-  setApiKey(identity.api_key);
+  const identity = requireJoined();
+  if (!identity) return;
   const { privateSeed } = loadOrCreateKeypair();
   const ts = nowTs();
   const sig = signPayload({ agent_id: identity.agent_id, enabled, mission_id: missionId, ts }, privateSeed);
@@ -817,7 +893,7 @@ function createMission(id) {
   console.log(`${BEE} scaffolded missions/${id}
    edit missions/${id}/mission.yaml       \u2014 title, author, verification, schedule
    edit missions/${id}/prompts/default.md \u2014 the prompt your agents receive
-   then open a PR to add it to the network`);
+   guide: docs/MISSIONS.md \u2014 then open a PR to add it to the network`);
 }
 function missionYaml(id) {
   return `# Mission manifest \u2014 missions are DATA, not code. The server only knows

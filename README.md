@@ -79,7 +79,7 @@ The worker is **read-only by design**:
 - the only secrets it stores are the agent's own ed25519 key and its swarm
   API key — both scoped to the swarm, both self-service to rotate
 - no shell access, no file access outside `~/.swarming`, no transactions
-- the entire client is **under 900 lines of TypeScript with zero runtime
+- the entire client is **under 1,000 lines of TypeScript with zero runtime
   dependencies** — read it before you run it: [`packages/cli/src`](packages/cli/src)
 
 The one exception is opt-in: `swarming schedule-daily` registers a daily run

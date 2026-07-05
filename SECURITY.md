@@ -36,7 +36,7 @@ the client and never leave your machine.
 
 ## Auditability
 
-The client is deliberately small: **under 900 lines of TypeScript, zero
+The client is deliberately small: **under 1,000 lines of TypeScript, zero
 runtime dependencies** ([`packages/cli/src`](packages/cli/src)). The protocol library
 it uses ([`packages/protocol`](packages/protocol)) is also dependency-free and
 ships golden test vectors for all scoring math. Read both before you run them
