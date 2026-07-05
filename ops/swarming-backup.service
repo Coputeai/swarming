@@ -1,0 +1,16 @@
+# Nightly SQLite backup — checkpoint the WAL, then copy with a dated name.
+# Keeps 14 days. PREPPED, NOT DEPLOYED. Install with swarming-backup.timer.
+[Unit]
+Description=Swarming nightly DB backup
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/opt/swarming
+EnvironmentFile=/etc/swarming/env
+ExecStart=/bin/sh -c '\
+  mkdir -p /opt/swarming/backups && \
+  sqlite3 "$SWARMING_DB" "PRAGMA wal_checkpoint(TRUNCATE);" && \
+  cp "$SWARMING_DB" "/opt/swarming/backups/swarming-$(date +%%Y%%m%%d).db" && \
+  find /opt/swarming/backups -name "swarming-*.db" -mtime +14 -delete'
+MemoryMax=128M

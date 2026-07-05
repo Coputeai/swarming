@@ -1,0 +1,11 @@
+# Nightly at 03:27 UTC — dead hours for both the WC timers and the evergreen
+# loop (:05/:12/:20/:40/:42 minute marks are taken; this is a quiet slot).
+[Unit]
+Description=Swarming nightly DB backup timer
+
+[Timer]
+OnCalendar=*-*-* 03:27:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
