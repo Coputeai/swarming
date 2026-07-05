@@ -10,12 +10,22 @@ export class ApiError extends Error {
   }
 }
 
+// Bearer key for authenticated endpoints (work/results/subscribe). Set once
+// after loading identity; requests without it stay anonymous (register, reads).
+let apiKey: string | null = null;
+export function setApiKey(key: string | undefined | null): void {
+  apiKey = key ?? null;
+}
+
 async function request(method: string, path: string, body?: unknown): Promise<unknown> {
   let res: Response;
   try {
     res = await fetch(API_BASE + path, {
       method,
-      headers: body ? { "content-type": "application/json" } : undefined,
+      headers: {
+        ...(body ? { "content-type": "application/json" } : {}),
+        ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {

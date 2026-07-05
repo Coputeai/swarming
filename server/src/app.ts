@@ -1,4 +1,5 @@
-import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   agentIdFromPubkey,
@@ -42,6 +43,74 @@ function makeLimiter(max: number, windowMs: number) {
     }
     h.n += 1;
     return h.n <= max;
+  };
+}
+
+// ---- API keys (public-network auth) --------------------------------------
+// Keys are the rate-limit/quota handle; ed25519 signatures remain the identity.
+// Plaintext keys are never stored — only their sha256. Re-registering (which
+// requires the agent's signing key) rotates the API key, so a lost key is
+// recovered with `join`, never a support ticket.
+
+const envInt = (name: string, fallback: number) => {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+};
+const KEY_LIMITS = {
+  workPerMin: envInt("SWARMING_LIMIT_WORK_PER_MIN", 30),
+  resultsPerMin: envInt("SWARMING_LIMIT_RESULTS_PER_MIN", 20),
+  workPerDay: envInt("SWARMING_QUOTA_WORK_PER_DAY", 2000),
+  resultsPerDay: envInt("SWARMING_QUOTA_RESULTS_PER_DAY", 200),
+};
+
+function hashKey(key: string): string {
+  return createHash("sha256").update(key).digest("hex");
+}
+
+function issueApiKey(db: DatabaseSync, agentId: string): string {
+  const key = "swk_" + randomBytes(24).toString("base64url");
+  const now = new Date().toISOString();
+  db.prepare("UPDATE api_keys SET revoked_at = ? WHERE agent_id = ? AND revoked_at IS NULL").run(now, agentId);
+  db.prepare("INSERT INTO api_keys (key_hash, agent_id, created_at) VALUES (?, ?, ?)").run(hashKey(key), agentId, now);
+  return key;
+}
+
+// Validates the bearer key, binds it to the claimed agent, and enforces the
+// per-key burst + daily quota. Returns null on success, or the reply on error.
+function makeKeyAuth(db: DatabaseSync) {
+  const burstWork = makeLimiter(KEY_LIMITS.workPerMin, 60 * 1000);
+  const burstResults = makeLimiter(KEY_LIMITS.resultsPerMin, 60 * 1000);
+  const dailyWork = makeLimiter(KEY_LIMITS.workPerDay, 24 * 60 * 60 * 1000);
+  const dailyResults = makeLimiter(KEY_LIMITS.resultsPerDay, 24 * 60 * 60 * 1000);
+
+  return function requireKey(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    agentId: string,
+    kind: "work" | "results",
+  ): FastifyReply | null {
+    const auth = String(req.headers.authorization ?? "");
+    const key = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+    if (!key.startsWith("swk_")) {
+      return err(reply, 401, "BAD_KEY", "missing API key — re-run `swarming join` to get one");
+    }
+    const keyHash = hashKey(key);
+    const row = db.prepare("SELECT agent_id, revoked_at FROM api_keys WHERE key_hash = ?").get(keyHash) as
+      | { agent_id: string; revoked_at: string | null } | undefined;
+    if (!row || row.revoked_at) {
+      logEvent(db, "auth_failed", { ip: req.ip, agent_id: agentId, payload: { reason: row ? "revoked" : "unknown_key" } });
+      return err(reply, 401, "BAD_KEY", "API key invalid or rotated — re-run `swarming join` to refresh it");
+    }
+    if (row.agent_id !== agentId) {
+      logEvent(db, "auth_failed", { ip: req.ip, agent_id: agentId, payload: { reason: "agent_mismatch" } });
+      return err(reply, 401, "BAD_KEY", "API key does not belong to this agent");
+    }
+    const burst = kind === "work" ? burstWork : burstResults;
+    const daily = kind === "work" ? dailyWork : dailyResults;
+    if (!burst(keyHash)) return err(reply, 429, "RATE_LIMITED", "too many requests, slow down");
+    if (!daily(keyHash)) return err(reply, 429, "QUOTA_EXCEEDED", "daily quota reached — resets within 24h");
+    db.prepare("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?").run(new Date().toISOString(), keyHash);
+    return null;
   };
 }
 
@@ -117,9 +186,12 @@ function maybeAdvanceRound(db: DatabaseSync, wu: Record<string, unknown>): void 
 }
 
 export function buildApp(db: DatabaseSync): FastifyInstance {
-  const app = Fastify({ logger: false });
+  // Behind nginx every socket is 127.0.0.1 — trust X-Forwarded-For there or
+  // per-IP limits (e.g. register 5/day) become one shared global bucket.
+  const app = Fastify({ logger: false, trustProxy: process.env.SWARMING_TRUST_PROXY === "1" });
   const registerLimit = makeLimiter(5, 24 * 60 * 60 * 1000);
   const submitLimit = makeLimiter(20, 60 * 1000);
+  const requireKey = makeKeyAuth(db);
 
   app.post("/v1/agents/register", async (req, reply) => {
     const b = req.body as Record<string, unknown>;
@@ -134,7 +206,10 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
     const existing = db.prepare("SELECT * FROM agents WHERE pubkey = ?").get(pubkeyB64) as Record<string, unknown> | undefined;
     if (existing) {
       db.prepare("UPDATE agents SET last_seen_at = ? WHERE agent_id = ?").run(new Date().toISOString(), existing.agent_id as string);
-      return registerResponse(db, existing);
+      // Signed re-register rotates the API key: lost keys are self-service.
+      const rotated = issueApiKey(db, existing.agent_id as string);
+      logEvent(db, "key_rotated", { ip: req.ip, agent_id: existing.agent_id as string });
+      return registerResponse(db, existing, rotated);
     }
 
     if (!registerLimit(req.ip)) return err(reply, 429, "RATE_LIMITED", "too many registrations from this IP today");
@@ -163,12 +238,13 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
         );
       }
     }
+    const apiKey = issueApiKey(db, agentId);
     logEvent(db, "join_completed", { ip: req.ip, agent_id: agentId, payload: { model_class: b.model_class } });
     const row = db.prepare("SELECT * FROM agents WHERE agent_id = ?").get(agentId) as Record<string, unknown>;
-    return registerResponse(db, row);
+    return registerResponse(db, row, apiKey);
   });
 
-  function registerResponse(database: DatabaseSync, agent: Record<string, unknown>) {
+  function registerResponse(database: DatabaseSync, agent: Record<string, unknown>, apiKey: string) {
     const enabled = (database
       .prepare("SELECT mission_id FROM subscriptions WHERE agent_id = ? AND enabled = 1")
       .all(agent.agent_id as string) as { mission_id: string }[]).map((r) => r.mission_id);
@@ -178,6 +254,7 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
       agent_number: agent.agent_number,
       profile_url: `${SITE_BASE}/a/${agent.name}`,
       enabled_missions: enabled,
+      api_key: apiKey,
     };
   }
 
@@ -199,6 +276,8 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
     if (!freshTs(b.ts)) return err(reply, 400, "STALE_TS", "timestamp outside allowed window");
     const agent = db.prepare("SELECT pubkey FROM agents WHERE agent_id = ?").get(String(b.agent_id ?? "")) as { pubkey: string } | undefined;
     if (!agent) return err(reply, 404, "UNKNOWN_AGENT", "agent not registered");
+    const denied = requireKey(req, reply, String(b.agent_id), "work");
+    if (denied) return denied;
     const signed = { agent_id: b.agent_id, enabled: b.enabled, mission_id: b.mission_id, ts: b.ts };
     if (!verifyPayload(signed, String(b.sig ?? ""), Buffer.from(agent.pubkey, "base64"))) {
       return err(reply, 401, "BAD_SIG", "signature invalid");
@@ -217,6 +296,8 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
     const agentRow = db.prepare("SELECT capabilities_json FROM agents WHERE agent_id = ?").get(agentId) as
       | { capabilities_json: string } | undefined;
     if (!agentRow) return err(reply, 404, "UNKNOWN_AGENT", "agent not registered");
+    const denied = requireKey(req, reply, agentId, "work");
+    if (denied) return denied;
     const agentCaps = new Set(JSON.parse(agentRow.capabilities_json) as string[]);
     const now = new Date().toISOString();
     const rows = db.prepare(
@@ -298,6 +379,8 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
 
     const agent = db.prepare("SELECT pubkey FROM agents WHERE agent_id = ?").get(String(b.agent_id ?? "")) as { pubkey: string } | undefined;
     if (!agent) return err(reply, 404, "UNKNOWN_AGENT", "agent not registered");
+    const denied = requireKey(req, reply, String(b.agent_id), "results");
+    if (denied) return denied;
 
     const taskId = String(b.task_id ?? "");
     const workunitId = taskId.startsWith("t_") ? taskId.slice(2) : "";

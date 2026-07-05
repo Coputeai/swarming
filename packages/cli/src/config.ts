@@ -27,13 +27,21 @@ export function loadOrCreateKeypair(): { publicKeyRaw: Buffer; privateSeed: Buff
   return { publicKeyRaw, privateSeed, created: true };
 }
 
-export function loadIdentity(): { agent_id: string; name: string } | null {
+export interface Identity {
+  agent_id: string;
+  name: string;
+  api_key?: string; // issued on join; rotated by re-joining
+}
+
+export function loadIdentity(): Identity | null {
   const p = join(configDir(), "identity.json");
   return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null;
 }
 
-export function saveIdentity(identity: { agent_id: string; name: string }): void {
-  writeFileSync(join(configDir(), "identity.json"), JSON.stringify(identity, null, 2) + "\n");
+export function saveIdentity(identity: Identity): void {
+  const p = join(configDir(), "identity.json");
+  writeFileSync(p, JSON.stringify(identity, null, 2) + "\n");
+  try { chmodSync(p, 0o600); } catch { /* windows */ }
 }
 
 export const SWARMING_MD_VERSION = "swarming-md@1.0.0";

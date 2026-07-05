@@ -8,7 +8,7 @@
     "server"
   ],
   "scripts": {
-    "test": "npm run test --workspace=@swarming/protocol",
+    "test": "npm run test --workspaces --if-present",
     "server": "npm run start --workspace=@swarming/server"
   },
   "engines": {

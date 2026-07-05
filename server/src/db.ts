@@ -87,6 +87,14 @@ export function openDb(): DatabaseSync {
       finalized_at TEXT,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS api_keys (
+      key_hash TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      revoked_at TEXT,
+      last_used_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_agent ON api_keys (agent_id);
     CREATE TABLE IF NOT EXISTS raw_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts TEXT NOT NULL,

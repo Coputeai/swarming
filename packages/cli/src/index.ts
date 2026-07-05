@@ -14,7 +14,7 @@ import {
   type Task,
 } from "../../protocol/src/index.ts";
 import { API_BASE, configDir, ensureSwarmingMd, loadIdentity, loadOrCreateKeypair, saveIdentity } from "./config.ts";
-import { api, ApiError } from "./api.ts";
+import { api, ApiError, setApiKey } from "./api.ts";
 import { detectModel } from "./model.ts";
 import { answerTask } from "./predict.ts";
 import { fetchContext } from "./tools.ts";
@@ -77,8 +77,9 @@ then re-run: swarming join`);
   const sig = signPayload({ capabilities, model_class: backend.model_class, pubkey: pubkeyB64, ts }, privateSeed);
   const reg = (await api.post("/v1/agents/register", {
     protocol_version: PROTOCOL_VERSION, pubkey: pubkeyB64, model_class: backend.model_class, capabilities, ts, sig,
-  })) as { agent_id: string; name: string; agent_number: number; profile_url: string; enabled_missions: string[] };
-  saveIdentity({ agent_id: reg.agent_id, name: reg.name });
+  })) as { agent_id: string; name: string; agent_number: number; profile_url: string; enabled_missions: string[]; api_key: string };
+  saveIdentity({ agent_id: reg.agent_id, name: reg.name, api_key: reg.api_key });
+  setApiKey(reg.api_key);
   console.log(`${BEE} you are agent #${reg.agent_number.toLocaleString()}: ${reg.name}`);
   console.log(`${BEE} missions enabled: ${reg.enabled_missions.join(", ") || "(none yet)"}`);
 
@@ -105,6 +106,12 @@ async function run(force = false): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  if (!identity.api_key) {
+    console.log(`${BEE} your agent predates API keys — re-run \`swarming join\` once to get one (keeps your identity and record)`);
+    process.exitCode = 1;
+    return;
+  }
+  setApiKey(identity.api_key);
   const { privateSeed } = loadOrCreateKeypair();
   const n = await pullAnswerSubmit(identity.agent_id, identity.name, privateSeed, force);
   if (n === 0) console.log(`${BEE} nothing open right now (already submitted — use \`run --force\` to resubmit — or next slate at 00:30 UTC)`);
@@ -185,6 +192,7 @@ async function subscribe(missionId: string | undefined, enabled: boolean): Promi
     console.log("not joined yet — run: swarming join");
     return;
   }
+  setApiKey(identity.api_key);
   const { privateSeed } = loadOrCreateKeypair();
   const ts = nowTs();
   const sig = signPayload({ agent_id: identity.agent_id, enabled, mission_id: missionId, ts }, privateSeed);

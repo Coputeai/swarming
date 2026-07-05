@@ -10,6 +10,8 @@ export type ErrorCode =
   | "BAD_SIG"
   | "STALE_TS"
   | "RATE_LIMITED"
+  | "QUOTA_EXCEEDED"
+  | "BAD_KEY"
   | "DUPLICATE"
   | "UNKNOWN_AGENT"
   | "NOT_ENABLED"
@@ -34,6 +36,7 @@ export interface RegisterResponse {
   agent_number: number;
   profile_url: string;
   enabled_missions: string[];
+  api_key: string; // bearer key for authenticated calls; re-register rotates it
 }
 
 export interface MissionSummary {

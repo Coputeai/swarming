@@ -6,7 +6,8 @@
   "description": "Swarming dispatch server (closed) — mission-generic work generator, intake, scoring.",
   "scripts": {
     "start": "node src/index.ts",
-    "admin": "node src/admin.ts"
+    "admin": "node src/admin.ts",
+    "test": "node --test test/*.test.ts"
   },
   "dependencies": {
     "fastify": "^5.0.0",
