@@ -1,0 +1,23 @@
+{
+  "_comment": "Daily slate TEMPLATE — data, not code. server/tools/daily-loop.mjs stamps q_ids with the date and fills resolve_at at publish time. Sources must be auto-resolvable (coingecko:<id>, rule close>=open).",
+  "questions": [
+    {
+      "q_id": "btc_updown",
+      "type": "binary",
+      "text": "Will Bitcoin (BTC/USD) close this slate at or above its price at slate open?",
+      "resolution": { "source": "coingecko:bitcoin", "rule": "close>=open", "resolve_at": "" }
+    },
+    {
+      "q_id": "eth_updown",
+      "type": "binary",
+      "text": "Will Ethereum (ETH/USD) close this slate at or above its price at slate open?",
+      "resolution": { "source": "coingecko:ethereum", "rule": "close>=open", "resolve_at": "" }
+    },
+    {
+      "q_id": "sol_updown",
+      "type": "binary",
+      "text": "Will Solana (SOL/USD) close this slate at or above its price at slate open?",
+      "resolution": { "source": "coingecko:solana", "rule": "close>=open", "resolve_at": "" }
+    }
+  ]
+}

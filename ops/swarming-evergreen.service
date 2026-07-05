@@ -1,0 +1,18 @@
+# Evergreen mission loop — resolve/score closed slates, publish the next one.
+# PREPPED, NOT DEPLOYED. Install (same pattern as the WC timers):
+#   sudo cp ops/swarming-evergreen.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now swarming-evergreen.timer
+[Unit]
+Description=Swarming evergreen mission loop (publish/resolve/score)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/opt/swarming
+EnvironmentFile=/etc/swarming/env
+ExecStart=/usr/bin/node server/tools/daily-loop.mjs
+# Shared box (copute.ai + Miru): never let a runaway loop eat the machine.
+MemoryMax=512M
+CPUQuota=50%
+TimeoutStartSec=10min
