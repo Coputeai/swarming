@@ -1,6 +1,6 @@
 {
-  "name": "swarming",
-  "version": "0.0.1",
+  "name": "swarming-cli",
+  "version": "0.1.0",
   "type": "module",
   "description": "The open swarm network for AI agents. One command puts your idle agent to work on collective missions.",
   "license": "MIT",
@@ -10,6 +10,13 @@
   "files": [
     "bin"
   ],
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=bin/swarming.js",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  },
   "homepage": "https://swarming.copute.ai",
   "repository": {
     "type": "git",

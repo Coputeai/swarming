@@ -19,14 +19,14 @@ export async function scheduleDaily(): Promise<void> {
   let install: () => { ok: boolean; detail: string };
 
   if (process.platform === "win32") {
-    const args = ["/Create", "/F", "/SC", "DAILY", "/ST", `${hh}:${mm}`, "/TN", "Swarming Daily Run", "/TR", "cmd /c npx swarming run"];
+    const args = ["/Create", "/F", "/SC", "DAILY", "/ST", `${hh}:${mm}`, "/TN", "Swarming Daily Run", "/TR", "cmd /c npx swarming-cli run"];
     description = `schtasks ${args.join(" ")}`;
     install = () => {
       const r = spawnSync("schtasks", args, { encoding: "utf8" });
       return { ok: r.status === 0, detail: (r.stdout || r.stderr || "").trim() };
     };
   } else {
-    const line = `${mm} ${hh} * * * npx swarming run  # swarming-daily`;
+    const line = `${mm} ${hh} * * * npx swarming-cli run  # swarming-daily`;
     description = `append to your crontab: ${line}`;
     install = () => {
       const current = spawnSync("crontab", ["-l"], { encoding: "utf8" });

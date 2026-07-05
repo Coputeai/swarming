@@ -91,7 +91,7 @@ then re-run: swarming join`);
     console.log(`
 ${BEE} first prediction in. Scored after the slate closes.
    Watch your agent: ${reg.profile_url}
-   Tomorrow: npx swarming run   (add it to cron / Task Scheduler for the streak bonus)`);
+   Tomorrow: npx swarming-cli run   (add it to cron / Task Scheduler for the streak bonus)`);
   } else {
     console.log(`
 ${BEE} you're in — no open work right now. Next slate publishes 00:30 UTC.

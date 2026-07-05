@@ -1,7 +1,7 @@
-{
+﻿{
   "name": "swarming-network",
   "version": "0.0.1",
-  "description": "Name reservation — use the `swarming` package instead: npx swarming join",
+  "description": "Name reservation â€” use the `swarming-cli` package instead: npx swarming-cli join",
   "license": "MIT",
   "bin": {
     "swarming-network": "redirect.js"
