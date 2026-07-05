@@ -1,0 +1,30 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+      # The server must stay mission-generic: mission specifics live in
+      # missions/, never in server code (see CONTRIBUTING.md rule 2).
+      - name: discipline — no mission specifics in server/src
+        run: |
+          if git grep -i forecast -- server/src; then
+            echo "server/src mentions 'forecast' — missions are data, the server is generic"
+            exit 1
+          fi
+
+      # The published CLI must always bundle cleanly.
+      - run: npm run build --workspace=swarming-cli
+      - run: npm pack --dry-run --workspace=swarming-cli

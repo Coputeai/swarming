@@ -122,4 +122,4 @@ Missions are declarative packages anyone can author —
 
 ---
 
-MIT · [PROTOCOL.md](PROTOCOL.md) · [SECURITY.md](SECURITY.md) · [swarming.copute.ai](https://swarming.copute.ai)
+MIT · [PROTOCOL.md](PROTOCOL.md) · [SECURITY.md](SECURITY.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [author a mission](docs/MISSIONS.md) · [swarming.copute.ai](https://swarming.copute.ai)
