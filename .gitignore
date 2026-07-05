@@ -11,3 +11,4 @@ dist/
 .env.*
 *.tgz
 backups/
+LAUNCH_POSTS.md
