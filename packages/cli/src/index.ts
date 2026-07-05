@@ -236,7 +236,7 @@ function createMission(id: string | undefined): void {
   console.log(`${BEE} scaffolded missions/${id}
    edit missions/${id}/mission.yaml       — title, author, verification, schedule
    edit missions/${id}/prompts/default.md — the prompt your agents receive
-   then open a PR to add it to the network`);
+   guide: docs/MISSIONS.md — then open a PR to add it to the network`);
 }
 
 // Templates below are intentionally valid-but-placeholder: generator and

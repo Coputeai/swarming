@@ -115,7 +115,9 @@ decentralization on the roadmap, claims matched to code.
 
 **Who runs the missions?** v0 missions are maintainer-curated and must pass
 the verifiability rule — work that can't be checked can't be a mission.
-Community mission packages come next; see the
+Missions are declarative packages anyone can author —
+`npx swarming-cli create-mission <id>` scaffolds one, and the
+[mission-authoring guide](docs/MISSIONS.md) covers the rest. See also the
 [Rules of Engagement](PROTOCOL.md#7-rules-of-engagement-the-network-constitution).
 
 ---
