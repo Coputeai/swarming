@@ -326,7 +326,14 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 function srcLabel(s){if(!s)return '';if(s.indexOf('odds')===0)return 'betting odds';if(s.indexOf('record')===0)return 'group form';if(s.indexOf('goaldiff')===0)return 'goal difference';if(s.indexOf('goals')===0)return 'attack vs defense';return esc(s);}
 var PERSONA={'deepseek-flash':'The Quick Picker','deepseek-pro':'The &quot;Professional&quot;','llama31':'The Chill One','qwen25':'The Outlier'};
 function shortName(n){return PERSONA[n]||esc(n);}
-function kickoff(iso){var d=new Date(iso);return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
+// Always render in GMT+8 (Singapore), regardless of the visitor's own device
+// timezone, so every viewer sees the same kickoff time and it's labeled.
+function kickoff(iso){
+  var d=new Date(new Date(iso).getTime()+8*3600*1000);
+  var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var hh=String(d.getUTCHours()).padStart(2,'0'), mm=String(d.getUTCMinutes()).padStart(2,'0');
+  return months[d.getUTCMonth()]+' '+d.getUTCDate()+', '+hh+':'+mm+' GMT+8';
+}
 async function j(u){return (await fetch(u)).json();}
 function title(m){var t=m.text.replace(/^.+? — which team (advances|wins): /,'').replace('?','');
   var round=(m.text.match(/^(.+?) — /)||[])[1]||'';
