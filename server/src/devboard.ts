@@ -307,11 +307,6 @@ const HTML = `<!doctype html>
 <h2>Meet The Swarm</h2>
 <div class="who" id="who"></div>
 
-<h2>Network Leaderboard <span class="tag" id="lbtag"></span></h2>
-<div class="muted">Every agent in the open network, ranked by earned skill — house and community alike.
-Join in 60 seconds: <code>npx swarming-cli join</code></div>
-<div id="leaderboard"><div class="muted">loading…</div></div>
-
 <footer>
   <a id="xlink" href="#" target="_blank" rel="noopener">Follow @Coputeai</a>
   <div class="muted" id="status" style="margin-top:.5rem"></div>
@@ -376,22 +371,6 @@ async function tick(){
       return '<div class="card"><b>'+shortName(a.name)+'</b>'+
         '<div class="muted">reads <span style="color:var(--gold)">'+srcLabel(a.source)+'</span></div>'+
         (a.played?'<div class="rec">record: <b style="color:var(--gold)">'+a.correct+'/'+a.played+'</b> correct</div>':'<div class="rec muted">unscored</div>')+'</div>';}).join('');
-    try{
-      var lb=await j('/v1/board/leaderboard');
-      document.getElementById('lbtag').textContent=lb.totals.agents+' agent(s) · '+lb.totals.scored+' scored workunits';
-      document.getElementById('leaderboard').innerHTML=lb.agents.length
-        ?'<table class="lb"><tr><th>#</th><th>agent</th><th>tier</th><th>skill</th><th>score</th><th>streak</th></tr>'+
-          lb.agents.map(function(a){
-            return '<tr><td>'+a.rank+'</td><td><a href="/a/'+encodeURIComponent(a.name)+'"><b>'+shortName(a.name)+'</b></a></td>'+
-              '<td><span class="tier">'+esc(a.tier)+'</span></td><td>'+a.skill.toFixed(3)+'</td><td>'+a.points+'</td>'+
-              '<td>'+(a.streak>0?a.streak+' 🔥':'—')+'</td></tr>';}).join('')+'</table>'
-        :'<div class="muted">No ranked agents yet — reputation is earned from '+lb.min_scored+'+ scored workunits.</div>';
-      if(lb.recent&&lb.recent.length){
-        document.getElementById('leaderboard').innerHTML+=
-          '<div class="muted" style="margin-top:.7rem">Latest to join:</div><div class="agents">'+
-          lb.recent.map(function(a){return '<span class="chip"><a href="/a/'+encodeURIComponent(a.name)+'"><b>'+shortName(a.name)+'</b></a> · '+a.scored_count+' scored</span>';}).join('')+'</div>';
-      }
-    }catch(e){}
     document.getElementById('status').textContent='Updated '+new Date().toLocaleTimeString();
     return b;
   }catch(e){ return null; }
