@@ -9,7 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "no
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { openDb } from "../src/db.ts";
+import { openDb, logEvent } from "../src/db.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const adminTs = join(here, "..", "src", "admin.ts");
@@ -21,6 +21,12 @@ const OVERLAP_HOURS = Number(process.env.SWARMING_EVERGREEN_OVERLAP_HOURS ?? 1);
 
 // Resolvers admin.ts can settle without an operator (oracle, deterministic).
 const AUTO_RESOLVERS = new Set(["coingecko-close", "binance-close"]);
+
+// A slate stuck unresolved this long past its close means the oracle has
+// silently drifted (API change, schema rename) — retrying forever hides it.
+// Lesson from the WC showcase: an ESPN slug rename once nearly stranded a
+// match with no alert. Loud + greppable beats silent + patient.
+const STUCK_ALERT_HOURS = Number(process.env.SWARMING_STUCK_ALERT_HOURS ?? 6);
 
 const db = openDb();
 const now = new Date();
@@ -51,6 +57,22 @@ for (const m of missions) {
       if (/unresolved questions/.test(msg)) continue; // oracle not ready — retry next run
       console.error(`daily-loop: ${wu.workunit_id} failed: ${msg.slice(0, 200)}`);
     }
+  }
+
+  // 1b) alert on anything still unresolved well past its close — once per
+  // workunit per threshold-crossing (raw_events dedupe), loud on stderr so
+  // `journalctl -p err` and log greps catch it.
+  const stuckBefore = new Date(now.getTime() - STUCK_ALERT_HOURS * 3600_000).toISOString();
+  const stuck = db.prepare(
+    "SELECT workunit_id, closes_at, status FROM workunits WHERE mission_id = ? AND closes_at <= ? AND status IN ('open','resolving','resolved') ORDER BY closes_at",
+  ).all(m.id, stuckBefore);
+  for (const wu of stuck) {
+    const already = db.prepare(
+      "SELECT 1 FROM raw_events WHERE kind = 'mission_stuck' AND payload_json LIKE ?",
+    ).get(`%${wu.workunit_id}%`);
+    if (already) continue;
+    logEvent(db, "mission_stuck", { payload: { workunit_id: wu.workunit_id, status: wu.status, closes_at: wu.closes_at, alert_hours: STUCK_ALERT_HOURS } });
+    console.error(`daily-loop: ALERT — ${wu.workunit_id} still '${wu.status}' ${STUCK_ALERT_HOURS}h+ after close (${wu.closes_at}). Oracle may have drifted; see docs/OPERATIONS.md manual resolve.`);
   }
 
   // 2) keep the mission open: publish when nothing stays open past the overlap window
