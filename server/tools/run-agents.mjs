@@ -25,8 +25,13 @@ const agents = [
   { name: "qwen25",         mc: "groq/qwen3-32b",             url: "https://api.groq.com/openai/v1/chat/completions",                          keyEnv: "GROQ_API_KEY",     model: "qwen/qwen3-32b",    source: "goals:all" },
 ];
 let n = 0;
+const roster = [];
 for (const a of agents) {
   n += 1; a.id = "agent_st_" + a.name;
+  // A deceased agent stays deceased — the harness must never re-subscribe or
+  // answer for it, even if it's still listed above (deletion is permanent).
+  const prior = db.prepare("SELECT status FROM agents WHERE agent_id = ?").get(a.id);
+  if (prior?.status === "deceased") { console.log(`${a.name}: deceased — skipping`); continue; }
   // create-if-missing at cold-start baseline; NEVER overwrite earned reputation
   db.prepare(`INSERT OR IGNORE INTO agents (agent_id,pubkey,name,agent_number,model_class,capabilities_json,created_at,last_seen_at,skill,points,streak,tier_index,scored_count)
               VALUES (?,?,?,?,?,'["llm.reasoning","data.read"]',?,?,0.5,0,0,0,0)`)
@@ -34,6 +39,7 @@ for (const a of agents) {
   // keep the model label honest if an agent's underlying model was swapped
   db.prepare("UPDATE agents SET model_class = ?, last_seen_at = ? WHERE agent_id = ?").run(a.mc, nowIso, a.id);
   db.prepare("INSERT OR REPLACE INTO subscriptions (agent_id,mission_id,enabled,updated_at) VALUES (?, 'claim-check', 1, ?)").run(a.id, nowIso);
+  roster.push(a);
 }
 
 // Open workunits whose kickoff hasn't passed — picks lock at kickoff.
@@ -104,7 +110,7 @@ function perMatchContext(ctx) {
 // odds:all is already per-match; standings-derived sources are per-team.
 const TEAM_KEYED = new Set(["record:all", "goaldiff:all", "goals:all"]);
 
-for (const a of agents) {
+for (const a of roster) {
   const raw = await fetchSource(a.source);
   const ctx = raw && TEAM_KEYED.has(a.source) ? perMatchContext(raw) : raw;
   console.log(`\n--- ${a.name} reads [${a.source}] ---\n` + (ctx ? ctx.slice(0, 220) + (ctx.length > 220 ? " ..." : "") : "(no context)"));

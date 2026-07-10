@@ -111,6 +111,10 @@ export function openDb(): DatabaseSync {
     "ALTER TABLE workunits ADD COLUMN round_started_at TEXT",
     "ALTER TABLE workunits ADD COLUMN round_closes_at TEXT",
     "ALTER TABLE workunits ADD COLUMN round_aggregates_json TEXT",
+    // Agent lifecycle: status='deceased' means the agent never acts again.
+    // Its scored history stays — public numbers must remain reproducible.
+    "ALTER TABLE agents ADD COLUMN deceased_at TEXT",
+    "ALTER TABLE agents ADD COLUMN epitaph TEXT",
   ]) {
     try { db.exec(stmt); } catch { /* column already exists */ }
   }

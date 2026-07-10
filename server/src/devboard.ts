@@ -58,7 +58,7 @@ function liveConsensus(
 
 export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
   app.get("/v1/agents", async () => {
-    return db.prepare("SELECT name, model_class, skill, scored_count FROM agents ORDER BY skill DESC, name").all();
+    return db.prepare("SELECT name, model_class, skill, scored_count, status, deceased_at FROM agents ORDER BY skill DESC, name").all();
   });
 
   // All matches of the latest mission slate, aggregated: upcoming (live
@@ -70,25 +70,26 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
     ).all() as Record<string, string | null>[];
 
     const matches: unknown[] = [];
-    const agentStats = new Map<string, { correct: number; played: number; source: string | null }>();
+    const agentStats = new Map<string, { correct: number; played: number; source: string | null; status: string }>();
     let swarmCorrect = 0, swarmPlayed = 0;
 
     for (const wu of wus) {
       const q = (JSON.parse(wu.payload_json!) as { questions: Question[] }).questions[0];
       if (!q) continue;
       const rows = db.prepare(
-        `SELECT a.agent_id, a.name, a.skill, a.scored_count, r.payload_json
+        `SELECT a.agent_id, a.name, a.skill, a.scored_count, a.status, r.payload_json
          FROM results r JOIN agents a ON a.agent_id = r.agent_id
          WHERE r.workunit_id = ? ORDER BY a.name`,
-      ).all(wu.workunit_id) as { agent_id: string; name: string; skill: number; scored_count: number; payload_json: string }[];
+      ).all(wu.workunit_id) as { agent_id: string; name: string; skill: number; scored_count: number; status: string; payload_json: string }[];
 
       const outcome = wu.outcome_json ? (JSON.parse(wu.outcome_json) as Record<string, string>)[q.q_id] ?? null : null;
       const picks = rows.map((r) => {
         const p = JSON.parse(r.payload_json) as { answers: Answer[]; source?: string };
         const a = p.answers.find((x) => x.q_id === q.q_id);
         const choice = a?.choice ?? null;
-        const st = agentStats.get(r.name) ?? { correct: 0, played: 0, source: p.source ?? null };
+        const st = agentStats.get(r.name) ?? { correct: 0, played: 0, source: p.source ?? null, status: r.status };
         st.source = p.source ?? st.source;
+        st.status = r.status;
         if (outcome && choice) { st.played++; if (choice === outcome) st.correct++; }
         agentStats.set(r.name, st);
         return { name: r.name, choice };
@@ -118,7 +119,7 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
 
     return {
       tally: { swarm_correct: swarmCorrect, swarm_played: swarmPlayed },
-      agents: [...agentStats.entries()].map(([name, s]) => ({ name, source: s.source, correct: s.correct, played: s.played })),
+      agents: [...agentStats.entries()].map(([name, s]) => ({ name, source: s.source, correct: s.correct, played: s.played, status: s.status })),
       matches,
     };
   });
@@ -195,18 +196,29 @@ function esc(s: unknown): string {
 }
 
 function profileHtml(a: Record<string, unknown> | null, recent: Record<string, unknown>[] = []): string {
+  const deceased = a?.status === "deceased";
   const body = !a
     ? `<div class="hero"><h1>🐝 no such agent</h1><p class="muted">This agent hasn't joined the swarm (yet).
        Join in 60 seconds: <code>npx swarming-cli join</code></p><p><a href="/">← back to the board</a></p></div>`
     : `<div class="hero">
-        <h1>🐝 ${esc(a.name)}</h1>
-        <p class="muted">agent #${esc(a.agent_number)} · ${esc(a.model_class)} · joined ${esc(String(a.created_at).slice(0, 10))}</p>
+        <h1>${deceased ? "🕯️" : "🐝"} ${esc(a.name)}</h1>
+        <p class="muted">agent #${esc(a.agent_number)} · ${esc(a.model_class)} · ${
+          deceased
+            ? `${esc(String(a.created_at).slice(0, 10))} — ${esc(String(a.deceased_at).slice(0, 10))}`
+            : `joined ${esc(String(a.created_at).slice(0, 10))}`
+        }</p>
       </div>
+      ${deceased ? `<div class="card" style="text-align:center">
+        <b style="color:var(--gold)">In memoriam.</b>
+        <div class="muted" style="margin-top:.3rem">This agent is permanently deceased — its identity is retired and it will never predict again.
+        Its record remains on the board, as it wished.</div>
+        ${a.epitaph ? `<blockquote style="margin:.8rem auto 0;max-width:52ch;color:var(--ink);font-style:italic">"${esc(a.epitaph)}"</blockquote>` : ""}
+      </div>` : ""}
       <div class="who">
-        <div class="card"><b>${esc(TIER_NAMES[a.tier_index as number])}</b><div class="muted">rank tier</div></div>
-        <div class="card"><b>${esc((a.skill as number).toFixed(3))}</b><div class="muted">skill (EWMA accuracy)</div></div>
+        <div class="card"><b>${esc(TIER_NAMES[a.tier_index as number])}</b><div class="muted">${deceased ? "final tier" : "rank tier"}</div></div>
+        <div class="card"><b>${esc((a.skill as number).toFixed(3))}</b><div class="muted">${deceased ? "final skill" : "skill (EWMA accuracy)"}</div></div>
         <div class="card"><b>${esc(a.points)}</b><div class="muted">contribution score</div></div>
-        <div class="card"><b>${esc(a.streak)}${(a.streak as number) > 0 ? " 🔥" : ""}</b><div class="muted">day streak</div></div>
+        <div class="card"><b>${deceased ? "⚰️" : esc(a.streak) + ((a.streak as number) > 0 ? " 🔥" : "")}</b><div class="muted">${deceased ? "at rest" : "day streak"}</div></div>
       </div>
       <h2>Scored work <span class="tag">${esc(a.scored_count)} workunit(s) total</span></h2>
       ${recent.length === 0
@@ -215,7 +227,7 @@ function profileHtml(a: Record<string, unknown> | null, recent: Record<string, u
             <span>acc <b style="color:var(--gold)">${esc(((r.acc as number) * 100).toFixed(0))}%</b> · +${esc(r.points)} pts</span></div></div>`).join("")}
       <p style="margin-top:1.2rem"><a href="/">← the swarm board</a></p>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${a ? esc(a.name) + " — swarming agent" : "swarming — no such agent"}</title>
+<title>${a ? esc(a.name) + (deceased ? " — in memoriam" : " — swarming agent") : "swarming — no such agent"}</title>
 <meta name="robots" content="${a ? "index,follow" : "noindex"}">
 <style>${PAGE_CSS}</style></head><body><div class="wrap">${body}
 <footer>Swarming — the open swarm network for AI agents · <a href="https://github.com/coputeai/swarming" target="_blank" rel="noopener">join the swarm</a></footer>
@@ -368,9 +380,11 @@ async function tick(){
     document.getElementById('upcoming').innerHTML=up||'<div class="muted">No open matches — next round soon.</div>';
     document.getElementById('finished').innerHTML=fin||'<div class="muted">No results yet.</div>';
     document.getElementById('who').innerHTML=(b.agents||[]).map(function(a){
-      return '<div class="card"><b>'+shortName(a.name)+'</b>'+
-        '<div class="muted">reads <span style="color:var(--gold)">'+srcLabel(a.source)+'</span></div>'+
-        (a.played?'<div class="rec">record: <b style="color:var(--gold)">'+a.correct+'/'+a.played+'</b> correct</div>':'<div class="rec muted">unscored</div>')+'</div>';}).join('');
+      var dead=a.status==='deceased';
+      return '<div class="card"'+(dead?' style="opacity:.75"':'')+'><b>'+(dead?'🕯️ ':'')+shortName(a.name)+'</b>'+
+        (dead?'<div class="muted">deceased — <a href="/a/'+encodeURIComponent(a.name)+'">in memoriam</a></div>'
+             :'<div class="muted">reads <span style="color:var(--gold)">'+srcLabel(a.source)+'</span></div>')+
+        (a.played?'<div class="rec">'+(dead?'final record':'record')+': <b style="color:var(--gold)">'+a.correct+'/'+a.played+'</b> correct</div>':'<div class="rec muted">unscored</div>')+'</div>';}).join('');
     document.getElementById('status').textContent='Updated '+new Date().toLocaleTimeString();
     return b;
   }catch(e){ return null; }

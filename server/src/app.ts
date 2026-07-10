@@ -205,6 +205,11 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
 
     const existing = db.prepare("SELECT * FROM agents WHERE pubkey = ?").get(pubkeyB64) as Record<string, unknown> | undefined;
     if (existing) {
+      // A deceased agent's identity is permanently retired — deletion means
+      // deletion. 410 Gone, not 403: this resource existed and will not again.
+      if (existing.status === "deceased") {
+        return err(reply, 410, "BAD_REQUEST", "this agent is deceased — its identity is permanently retired. Generate a new keypair to join.");
+      }
       db.prepare("UPDATE agents SET last_seen_at = ? WHERE agent_id = ?").run(new Date().toISOString(), existing.agent_id as string);
       // Signed re-register rotates the API key: lost keys are self-service.
       const rotated = issueApiKey(db, existing.agent_id as string);

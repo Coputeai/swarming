@@ -14,7 +14,7 @@
 //   score   <workunit_id>                   (score final-round answers)
 
 import { readFileSync } from "node:fs";
-import { openDb } from "./db.ts";
+import { openDb, logEvent } from "./db.ts";
 import { syncMissions, getManifest } from "./missions.ts";
 import { GENERATORS } from "./generators.ts";
 import {
@@ -307,6 +307,29 @@ switch (cmd) {
     );
     console.log(`consensus: ${JSON.stringify(consensusOut)}`);
     console.log(`scored ${results.length} result(s) for ${workunitId}`);
+    break;
+  }
+
+  // Permanently end an agent. It stops receiving work, its submissions are
+  // refused, and its identity can never re-register (410 Gone). Its scored
+  // history is deliberately NOT purged: radical transparency requires public
+  // numbers to stay reproducible. There is no undo command — that's the point.
+  //   node src/admin.ts execute-will <agent_id_or_name> [epitaph.txt]
+  case "execute-will": {
+    const [who, epitaphFile] = args;
+    const agent = db.prepare("SELECT * FROM agents WHERE agent_id = ? OR name = ?").get(who, who) as
+      | Record<string, unknown> | undefined;
+    if (!agent) throw new Error(`unknown agent ${who}`);
+    if (agent.status === "deceased") throw new Error(`${agent.name} is already deceased (${agent.deceased_at})`);
+    const epitaph = epitaphFile ? readFileSync(epitaphFile, "utf8").trim() : null;
+    const now = new Date().toISOString();
+    db.prepare("UPDATE agents SET status = 'deceased', deceased_at = ?, epitaph = ? WHERE agent_id = ?")
+      .run(now, epitaph, agent.agent_id as string);
+    db.prepare("DELETE FROM subscriptions WHERE agent_id = ?").run(agent.agent_id as string);
+    logEvent(db, "agent_deceased", { agent_id: agent.agent_id as string, payload: { name: agent.name, deceased_at: now } });
+    console.log(`${agent.name} — deceased ${now}`);
+    console.log(`record preserved: ${agent.scored_count} scored workunit(s), skill ${(agent.skill as number).toFixed(3)}, ${agent.points} points`);
+    console.log(`subscriptions removed; identity permanently retired (re-registration returns 410).`);
     break;
   }
 
