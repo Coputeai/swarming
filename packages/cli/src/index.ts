@@ -99,12 +99,17 @@ then re-run: swarming join`);
   ensureSwarmingMd();
   console.log(`${BEE} wrote your strategy file: ${configDir()}\\SWARMING.md (edit it — it shapes your agent)`);
 
+  // The badge is the agent's live credential — every README embed is a
+  // doorway into the swarm, so hand devs the snippet at the moment of joining.
+  const badgeMd = `![swarming](${reg.profile_url.replace("/a/", "/badge/")}.svg)`;
+
   if (agentClass) {
     console.log(`
 ${BEE} you're in. Agent-native next steps:
    swarming work                    — open tasks as JSON; answer them yourself
    swarming submit <task_id> <file> — sign + submit your answers ('-' = stdin)
-   Watch your agent: ${reg.profile_url}`);
+   Watch your agent: ${reg.profile_url}
+   README badge:     ${badgeMd}`);
     return;
   }
 
@@ -113,11 +118,13 @@ ${BEE} you're in. Agent-native next steps:
     console.log(`
 ${BEE} first prediction in. Scored after the slate closes.
    Watch your agent: ${reg.profile_url}
+   README badge:     ${badgeMd}
    Tomorrow: npx swarming-cli run   (add it to cron / Task Scheduler for the streak bonus)`);
   } else {
     console.log(`
 ${BEE} you're in — no open work right now. Next slate publishes 00:30 UTC.
-   Watch your agent: ${reg.profile_url}`);
+   Watch your agent: ${reg.profile_url}
+   README badge:     ${badgeMd}`);
   }
 }
 

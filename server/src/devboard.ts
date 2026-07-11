@@ -174,6 +174,23 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
     return reply.type("text/html").send(profileHtml(a, recent));
   });
 
+  // Agent credential badge — an embeddable, live proof of track record.
+  // Devs put this in their READMEs; every embed is a doorway into the swarm.
+  app.get("/badge/:name", async (req, reply) => {
+    const name = String((req.params as { name: string }).name).replace(/\.svg$/, "");
+    const a = db.prepare("SELECT name, skill, tier_index, status, scored_count FROM agents WHERE name = ? OR agent_id = ?")
+      .get(name, name) as Record<string, unknown> | undefined;
+    const value = !a
+      ? "unknown agent"
+      : a.status === "deceased"
+        ? `${a.name} · in memoriam`
+        : `${a.name} · skill ${(a.skill as number).toFixed(2)} · ${TIER_NAMES[a.tier_index as number]}`;
+    reply
+      .type("image/svg+xml")
+      .header("cache-control", "public, max-age=3600")
+      .send(badgeSvg("🐝 swarming", value, a ? "#f5b81e" : "#9a917c"));
+  });
+
   app.get("/", async (_req, reply) => reply.type("text/html").send(HTML));
 
   // header art (cached once; served same-origin so the page works offline/deployed)
@@ -193,6 +210,28 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
 // escape everything anyway — no dynamic string reaches the page raw).
 function esc(s: unknown): string {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// Shields-style flat badge. Width is estimated per character — close enough
+// for badge text; GitHub renders the SVG via its image proxy without fuss.
+function badgeSvg(label: string, value: string, valueColor: string): string {
+  const charW = 6.6, pad = 10;
+  const lw = Math.round(label.length * charW + pad * 2);
+  const vw = Math.round(value.length * charW + pad * 2);
+  const w = lw + vw;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" role="img" aria-label="${esc(label)}: ${esc(value)}">
+<linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+<clipPath id="r"><rect width="${w}" height="20" rx="3" fill="#fff"/></clipPath>
+<g clip-path="url(#r)">
+<rect width="${lw}" height="20" fill="#1d1a13"/>
+<rect x="${lw}" width="${vw}" height="20" fill="${valueColor}"/>
+<rect width="${w}" height="20" fill="url(#s)"/>
+</g>
+<g fill="#ece6d6" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+<text x="${lw / 2}" y="14">${esc(label)}</text>
+<text x="${lw + vw / 2}" y="14" fill="#1a1508" font-weight="bold">${esc(value)}</text>
+</g>
+</svg>`;
 }
 
 function profileHtml(a: Record<string, unknown> | null, recent: Record<string, unknown>[] = []): string {
