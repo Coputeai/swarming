@@ -126,7 +126,7 @@ switch (cmd) {
     if (auto) {
       for (const q of questions) {
         if (q.q_id in outcomes) continue;
-        const out = (await resolveCoingecko(q, wu.published_at, wu.closes_at)) ?? (await resolveEspnMatch(q));
+        const out = (await resolveCoingecko(q, wu.published_at, wu.closes_at)) ?? (await resolveEspnMatch(q)) ?? (await resolveGithubStars(q));
         if (out !== null) {
           outcomes[q.q_id] = out;
           console.log(`auto-resolved ${q.q_id} = ${out} (${q.resolution.source}, ${q.resolution.rule})`);
@@ -388,6 +388,36 @@ async function resolveEspnMatch(q: Question): Promise<string | null> {
     return choice ?? null;
   }
   return null;
+}
+
+/**
+ * Deterministic oracle for `github-stars:<a>|<b>` sources with rule
+ * "more-stars-gained": star delta since publish, using the opening counts
+ * stamped into the question at publish time (resolution.open_values — visible
+ * to every agent, so the math is reproducible by anyone). Larger delta wins;
+ * a tie goes to the repo with fewer total stars at close (underdog rule).
+ */
+async function resolveGithubStars(q: Question): Promise<string | null> {
+  const m = q.resolution.source.match(/^github-stars:(.+)\|(.+)$/);
+  if (!m || q.resolution.rule !== "more-stars-gained" || q.type !== "choice") return null;
+  const open = (q.resolution as { open_values?: Record<string, number> }).open_values;
+  if (!open) return null; // published without opening counts — manual resolve only
+  const repos = [m[1], m[2]];
+  const close: Record<string, number> = {};
+  for (const repo of repos) {
+    const r = await fetch(`https://api.github.com/repos/${repo}`, {
+      headers: { accept: "application/vnd.github+json", "user-agent": "swarming-resolver" },
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!r.ok) throw new Error(`github ${r.status} for ${repo}`);
+    close[repo] = ((await r.json()) as { stargazers_count: number }).stargazers_count;
+  }
+  const [a, b] = repos;
+  const deltaA = close[a] - (open[a] ?? 0);
+  const deltaB = close[b] - (open[b] ?? 0);
+  console.log(`  ${a}: +${deltaA} (${open[a]}→${close[a]})  ${b}: +${deltaB} (${open[b]}→${close[b]})`);
+  const winner = deltaA !== deltaB ? (deltaA > deltaB ? a : b) : (close[a] <= close[b] ? a : b);
+  return q.choices.includes(winner) ? winner : null;
 }
 
 async function resolveCoingecko(q: Question, publishedAt: string, closesAt: string): Promise<0 | 1 | null> {

@@ -20,7 +20,29 @@ const missionsDir = process.env.SWARMING_MISSIONS_DIR ?? join(here, "..", "..", 
 const OVERLAP_HOURS = Number(process.env.SWARMING_EVERGREEN_OVERLAP_HOURS ?? 1);
 
 // Resolvers admin.ts can settle without an operator (oracle, deterministic).
-const AUTO_RESOLVERS = new Set(["coingecko-close", "binance-close"]);
+const AUTO_RESOLVERS = new Set(["coingecko-close", "binance-close", "github-stars"]);
+
+// Some sources need an opening value recorded at publish so the resolver can
+// measure a delta at close. Stamped INTO the question — every agent sees the
+// same numbers, and the resolve math is reproducible by anyone.
+async function stampOpenValues(q) {
+  const m = q.resolution?.source?.match(/^github-stars:(.+)\|(.+)$/);
+  if (!m) return q;
+  const open = {};
+  for (const repo of [m[1], m[2]]) {
+    const r = await fetch(`https://api.github.com/repos/${repo}`, {
+      headers: { accept: "application/vnd.github+json", "user-agent": "swarming-daily-loop" },
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!r.ok) throw new Error(`github ${r.status} for ${repo} — slate not published this run`);
+    open[repo] = (await r.json()).stargazers_count;
+  }
+  return {
+    ...q,
+    text: `${q.text} (opening counts: ${Object.entries(open).map(([k, v]) => `${k} ${v.toLocaleString()}★`).join(", ")})`,
+    resolution: { ...q.resolution, open_values: open },
+  };
+}
 
 // A slate stuck unresolved this long past its close means the oracle has
 // silently drifted (API change, schema rename) — retrying forever hides it.
@@ -85,11 +107,19 @@ for (const m of missions) {
   const template = JSON.parse(readFileSync(join(missionsDir, m.id, "slate.json"), "utf8"));
   const date = nowIso.slice(0, 10);
   const closesAt = new Date(now.getTime() + m.window_hours * 3600_000).toISOString();
-  const questions = template.questions.map((q) => ({
-    ...q,
-    q_id: `${q.q_id}_${date}`,
-    resolution: { ...q.resolution, resolve_at: closesAt },
-  }));
+  let questions;
+  try {
+    questions = await Promise.all(template.questions.map(async (q) => stampOpenValues({
+      ...q,
+      q_id: `${q.q_id}_${date}`,
+      resolution: { ...q.resolution, resolve_at: closesAt },
+    })));
+  } catch (e) {
+    // A failed stamp (source API down) skips THIS publish, not the whole loop —
+    // the next timer tick retries. Never publish a delta slate without opens.
+    console.error(`daily-loop: ${m.id} publish skipped: ${e.message}`);
+    continue;
+  }
   const tmp = mkdtempSync(join(tmpdir(), "swarming-slate-"));
   const inputFile = join(tmp, "slate.json");
   try {

@@ -1,0 +1,14 @@
+# Mission 3 — the tech slate. Missions are data, not code: generator +
+# resolver come from the whitelisted library (see PROTOCOL.md, docs/MISSIONS.md).
+id: repo-race
+version: 1.0.0
+author: coputeai
+title: "Repo Race: which repo gains more stars this week?"
+default: true
+pattern: broadcast
+verification: { mode: oracle, resolver: github-stars }
+generator: question-slate
+capabilities: [llm.reasoning]
+schedule: "0 1 * * 1"
+window_hours: 166
+points: { base: 15, daily_budget: 50000 }

@@ -58,6 +58,7 @@ points: { base: 10, daily_budget: 50000 }
 | generator | `question-slate` | turns a `{questions[]}` input into a workunit |
 | resolver | `coingecko-close` | binary `close>=open` vs CoinGecko price history |
 | | `binance-close` | same rule, Binance data |
+| | `github-stars` | choice `more-stars-gained`: star delta since publish (opening counts stamped into the question; ties go to the smaller repo) |
 | | `manual-dev` | operator supplies outcomes (dev/staging only) |
 | | `quorum-self` | the swarm's diversity-weighted consensus IS the canonical answer |
 
@@ -80,8 +81,10 @@ closes, resolves via your declared oracle, and scores automatically.
 ```
 
 Requirements: every question's resolver must be auto-resolvable
-(`coingecko-close` / `binance-close` today). See `missions/daily-forecast/`
-for the live reference.
+(`coingecko-close` / `binance-close` / `github-stars` today). Live references:
+`missions/daily-forecast/` (daily, binary, price oracle) and
+`missions/repo-race/` (weekly, choice, star-delta oracle with opening counts
+stamped into each question at publish).
 
 ## Question types
 

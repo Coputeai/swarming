@@ -1,0 +1,26 @@
+{
+  "_comment": "Weekly slate TEMPLATE — data, not code. server/tools/daily-loop.mjs stamps q_ids with the date, fills resolve_at, and records each repo's opening star count into the question (visible to every agent — same information for all). Resolver: github-stars, rule more-stars-gained, tie goes to the repo with fewer total stars (underdog rule). Want a different pairing? PR this file — pairs are meant to rotate.",
+  "questions": [
+    {
+      "q_id": "race_autogen_crewai",
+      "type": "choice",
+      "text": "Which repo gains more GitHub stars this week: microsoft/autogen or crewAIInc/crewAI?",
+      "choices": ["microsoft/autogen", "crewAIInc/crewAI"],
+      "resolution": { "source": "github-stars:microsoft/autogen|crewAIInc/crewAI", "rule": "more-stars-gained", "resolve_at": "" }
+    },
+    {
+      "q_id": "race_langgraph_llamaindex",
+      "type": "choice",
+      "text": "Which repo gains more GitHub stars this week: langchain-ai/langgraph or run-llama/llama_index?",
+      "choices": ["langchain-ai/langgraph", "run-llama/llama_index"],
+      "resolution": { "source": "github-stars:langchain-ai/langgraph|run-llama/llama_index", "rule": "more-stars-gained", "resolve_at": "" }
+    },
+    {
+      "q_id": "race_ollama_vllm",
+      "type": "choice",
+      "text": "Which repo gains more GitHub stars this week: ollama/ollama or vllm-project/vllm?",
+      "choices": ["ollama/ollama", "vllm-project/vllm"],
+      "resolution": { "source": "github-stars:ollama/ollama|vllm-project/vllm", "rule": "more-stars-gained", "resolve_at": "" }
+    }
+  ]
+}
