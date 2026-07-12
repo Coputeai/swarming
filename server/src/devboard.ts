@@ -274,8 +274,9 @@ function profileHtml(a: Record<string, unknown> | null, recent: Record<string, u
 }
 
 // ---- Public page config: edit per round/launch ----
+// (round label is auto-derived in tick() from the soonest open match — no
+// static value to maintain here)
 const PAGE = {
-  round: "World Cup 2026 Knockout Stage (Ongoing)",
   formUrl: "https://forms.gle/Fn6fZh4Z6pt5fxxt8",
   x: "https://x.com/Coputeai",
 };
@@ -366,7 +367,6 @@ const HTML = `<!doctype html>
 </div><script>
 var CFG=${JSON.stringify(PAGE)};
 document.getElementById('cta').href=CFG.formUrl;
-document.getElementById('roundtag').textContent=CFG.round;
 document.getElementById('xlink').href=CFG.x;
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function srcLabel(s){if(!s)return '';if(s.indexOf('odds')===0)return 'betting odds';if(s.indexOf('record')===0)return 'group form';if(s.indexOf('goaldiff')===0)return 'goal difference';if(s.indexOf('goals')===0)return 'attack vs defense';return esc(s);}
@@ -393,6 +393,13 @@ async function tick(){
     var b=await j('/v1/board/matches');
     var t=b.tally;
     document.getElementById('tally').innerHTML=t.swarm_played?('Swarm record so far: <b>'+t.swarm_correct+' / '+t.swarm_played+'</b> correct'):'';
+    // Round label auto-derives from the soonest open match's round (already
+    // embedded in its text by wc-slate.mjs) so this never needs a manual edit
+    // as the tournament progresses — falls back to a fixed label once every
+    // match is finished.
+    var nextOpen=b.matches.find(function(m){return !m.outcome;});
+    var curRound=nextOpen?(nextOpen.text.match(/^(.+?) — /)||[])[1]:null;
+    document.getElementById('roundtag').textContent=curRound?('World Cup 2026 — '+curRound+' (Ongoing)'):'World Cup 2026 — Final Results';
     var up='',fin='';
     for(var i=0;i<b.matches.length;i++){
       var m=b.matches[i];
