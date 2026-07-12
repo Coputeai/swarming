@@ -27,4 +27,4 @@ Other standing rules:
 
 ## Infra
 
-Shared EC2 box [REDACTED-HOST] (techdev account, ap-southeast-1) — full access recipe, nginx pattern, systemd timer pattern, and deploy one-liner are in `docs/OPERATIONS.md`. Never SSH or deploy without a fresh explicit go from Lawrence in the current conversation (see global `CLAUDE.md`) — the box also hosts copute.ai production and (soon) COPUGEO.
+The live network runs on a shared production box. All coordinates, access recipes, nginx/systemd patterns, and the deploy one-liner live in `docs/OPERATIONS.md` — untracked and private; ask the owner if you need it. Never SSH or deploy without a fresh explicit go from Lawrence in the current conversation.

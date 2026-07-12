@@ -182,7 +182,7 @@ everything — retroactive filtering before any allocation (RoE 5).
 ### 5.1 Stack
 TypeScript end-to-end. CLI: Node ≥20, npx-able, ≤5 runtime deps, ≤1,500 LOC (real number
 in README). Server: Node + Fastify + SQLite WAL (→Postgres at ~5K agents) on existing
-EC2 ([REDACTED-HOST]), nginx + Let's Encrypt. Site: static + small JSON API. Monorepo:
+EC2, nginx + Let's Encrypt. Site: static + small JSON API. Monorepo:
 `packages/cli`, `packages/protocol`, `missions/`, `server/` (splits to private repo
 before public flip), `site/`.
 

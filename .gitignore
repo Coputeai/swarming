@@ -3,6 +3,10 @@ BUILD_BRIEF.md
 DEV_LAUNCH_BRIEF.md
 MARKETING_*.md
 
+# box runbooks — contain live infra coordinates; private, never public
+docs/OPERATIONS.md
+ops/DEPLOY_DAY.md
+
 node_modules/
 server/data/
 .swarming-dev/
