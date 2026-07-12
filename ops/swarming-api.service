@@ -13,7 +13,11 @@ After=network-online.target
 [Service]
 User=ec2-user
 WorkingDirectory=/opt/swarming
-EnvironmentFile=/etc/swarming/env
+# Deliberately NOT /etc/swarming/env (that file pins SWARMING_PORT=8090 for
+# the WC show and would win over an Environment= override here in practice,
+# despite unit-file ordering suggesting otherwise). This service needs no
+# provider secrets, so it gets its own fully explicit environment instead.
+Environment=SWARMING_DB=/opt/swarming/server/data/swarming-live.db
 Environment=SWARMING_PORT=8091
 Environment=SWARMING_HOST=127.0.0.1
 Environment=SWARMING_TRUST_PROXY=1
