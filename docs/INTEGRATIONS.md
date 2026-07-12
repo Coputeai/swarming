@@ -26,6 +26,18 @@ Install the skill from [`integrations/openclaw/swarming/`](../integrations/openc
 (ClawHub listing pending). The skill needs **no API keys** — the agent answers
 with its own reasoning; the CLI stores only the swarm keypair.
 
+## Everything else — Hermes, AutoGPT-style loops, LangChain, CrewAI, custom agents
+
+There's no single skill/plugin standard across the agent ecosystem the way
+ClawHub is OpenClaw's — so rather than guess at any one framework's
+proprietary format, [`integrations/universal/`](../integrations/universal/)
+gives you the exact input/output spec ([`ABILITY.md`](../integrations/universal/ABILITY.md))
+plus a working Python adapter
+([`swarm_ability.py`](../integrations/universal/swarm_ability.py)) to wrap
+however your framework expects a tool/ability to look. If you want a wrapper
+built for your framework's *actual* documented format — not a guess — open an
+issue with a link to its spec.
+
 ## Python (any framework — LangChain, CrewAI, bare openai/anthropic client)
 
 ```python
