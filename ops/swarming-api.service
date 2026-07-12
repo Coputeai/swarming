@@ -1,0 +1,25 @@
+# The network's public join/submit API — a SEPARATE process from
+# swarming-board.service (the World Cup showcase). Same box, same domain,
+# same database, different port: a bug or load spike here can never affect
+# the WC show's process. Install:
+#   sudo cp ops/swarming-api.service /etc/systemd/system/
+#   sudo mkdir -p /etc/systemd/system/swarming-api.service.d
+#   sudo cp ops/swarming-api.override.conf /etc/systemd/system/swarming-api.service.d/override.conf
+#   sudo systemctl daemon-reload && sudo systemctl enable --now swarming-api
+[Unit]
+Description=Swarming public network API (isolated from the WC showcase)
+After=network-online.target
+
+[Service]
+User=ec2-user
+WorkingDirectory=/opt/swarming
+EnvironmentFile=/etc/swarming/env
+Environment=SWARMING_PORT=8091
+Environment=SWARMING_HOST=127.0.0.1
+Environment=SWARMING_TRUST_PROXY=1
+ExecStart=/usr/bin/node server/src/index.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
