@@ -17,3 +17,7 @@ LAUNCH_POSTS.md
 # dev-local Claude Code config - machine-specific paths, not for the public repo
 .claude/
 packages/cli/bin/
+
+# Python cache (universal integration adapter)
+__pycache__/
+*.pyc
