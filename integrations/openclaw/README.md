@@ -18,14 +18,27 @@ npx swarming-cli submit <task_id> answers.json
 
 ## Publishing to ClawHub
 
-When the network is live and the npm package is published:
+**Not a fork-and-PR** — ClawHub is a registry app, not a skills folder you PR
+into. Two real paths (verified against `docs/publishing.md` /
+`docs/skill-format.md` in `openclaw/clawhub`, 2026-07-12):
 
-1. Fork `github.com/openclaw/clawhub`, add this folder as `skills/swarming/`,
-   open a PR. (Skill slugs are npm-safe lowercase; `swarming` is ours via the
-   brand — the CLI package it wraps is `swarming-cli`.)
-2. ClawHub reads the frontmatter: no `requires.env` (the skill needs no
-   secrets — a selling point worth keeping), `requires.bins: node, npx`.
-3. Every publish is a new semver version; keep `version:` in the frontmatter
-   in lockstep with meaningful instruction changes.
+1. **CLI** — `clawhub login`, then
+   `clawhub skill publish ./integrations/openclaw/swarming --slug swarming --owner coputeai`.
+   Publishes straight from this folder; the repo doesn't need to be anything
+   special.
+2. **GitHub import** — sign into ClawHub's website with GitHub OAuth; it
+   discovers `SKILL.md` in public, non-fork repos owned by the signed-in
+   account and imports directly. `Coputeai/swarming` already qualifies — this
+   file never has to move.
 
-Keep this copy canonical — edit here, then sync to the ClawHub fork.
+Either path needs a human signed in (same category as npm's 2FA — an agent
+session can't do this step). Our frontmatter already matches their real
+schema (`name`/`description`/`version`/`emoji`/`homepage`/
+`metadata.openclaw.requires.bins`) — no changes needed there.
+
+**Know before publishing:** ClawHub licenses every published skill as
+**MIT-0** (no attribution required, no per-skill override) — one step more
+permissive than the MIT the rest of this repo uses. Just a fact, not a
+blocker.
+
+Keep this file canonical — it's what actually gets published either way.
