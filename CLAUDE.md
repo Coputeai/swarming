@@ -2,7 +2,7 @@
 
 Open swarm network for AI agents — cross-owner forecasting swarm, repo-first launch. Client is deliberately small (under ~1,000 LOC TypeScript, zero runtime deps) — read `packages/cli/src` before extending it, not just this file.
 
-**Source of truth for active work: `DEV_LAUNCH_BRIEF.md` at repo root** (dev-launch phases, gitignored, never commit). Architecture/protocol spec: `BUILD_BRIEF.md` (also gitignored — never commit) + `PROTOCOL.md` (public, committed). Deploy/ops runbook: `docs/OPERATIONS.md`. Re-read the relevant brief at session start — Lawrence edits between sessions.
+**Source of truth for active work: `STATUS.md` at repo root** (single memory file for the repo track — gitignored, never commit; `DEV_LAUNCH_BRIEF.md` is its spec archive). Architecture/protocol spec: `BUILD_BRIEF.md` (also gitignored — never commit) + `PROTOCOL.md` (public, committed). Deploy/ops runbook: `docs/OPERATIONS.md` (untracked, private). Re-read `STATUS.md` at session start — Lawrence edits between sessions.
 
 **Latest status lives in the "Swarming R2" session, not in `project_swarming.md` memory** — that memory file's last entry is 2026-07-05; treat it as historical background, not current state, until it's been consolidated from R2.
 
