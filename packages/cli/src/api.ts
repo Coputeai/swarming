@@ -31,7 +31,7 @@ async function request(method: string, base: string, path: string, body?: unknow
   } catch {
     throw new ApiError(
       "NETWORK",
-      `could not reach the swarm at ${API_BASE} — it may be down or you may be offline. Your work is not lost; try again in a bit.`,
+      `could not reach the swarm at ${base} — it may be down or you may be offline. Your work is not lost; try again in a bit.`,
     );
   }
   const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;

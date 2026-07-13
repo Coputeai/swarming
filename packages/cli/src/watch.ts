@@ -62,8 +62,14 @@ function render(board: LeaderboardResp, tick: number): void {
 export async function watch(): Promise<void> {
   let tick = 0;
   let stopped = false;
+  // Ctrl+C needs to interrupt the pending refresh timer immediately, not
+  // just flip a flag the loop won't check until the next tick fires (up to
+  // REFRESH_MS later) — `wake` cancels the in-flight setTimeout and resolves
+  // the wait right away.
+  let wake: (() => void) | null = null;
   process.on("SIGINT", () => {
     stopped = true;
+    wake?.();
   });
   while (!stopped) {
     tick += 1;
@@ -75,7 +81,11 @@ export async function watch(): Promise<void> {
       if (stopped) break;
       console.error(`${BEE} could not reach the board: ${e instanceof ApiError ? e.message : String(e)}`);
     }
-    await new Promise((r) => setTimeout(r, REFRESH_MS));
+    if (stopped) break;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, REFRESH_MS);
+      wake = () => { clearTimeout(timer); resolve(); };
+    });
   }
   console.log(`\n${BEE} stopped watching.`);
 }
