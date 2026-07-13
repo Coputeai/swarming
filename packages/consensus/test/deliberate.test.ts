@@ -84,3 +84,31 @@ test("deliberate: single question never clusters agents (matches the network's o
 test("deliberate: throws on empty agents array", async () => {
   await assert.rejects(() => deliberate({ question: "q", agents: [] }));
 });
+
+test("deliberate: a minority-shape answer doesn't erase the majority's votes", async () => {
+  // 3 numeric agents agree strongly; 1 lone agent answers with a string
+  // instead. The numeric majority must still decide the round — a naive
+  // "every answer must be numeric to count as binary" check would instead
+  // flip the round to choice-type and make the ONE string answer "win"
+  // unanimous, discarding all 3 real votes.
+  const choice = async () => ({ answer: "not-a-number", confidence: 0.5, rationale: "" });
+  const v = await deliberate({
+    question: "q",
+    agents: [fixed(0.95), fixed(0.93), fixed(0.9), choice],
+    rounds: 1,
+  });
+  assert.equal(v.committed, true);
+  assert.equal(v.answer, 1);
+});
+
+test("deliberate: confidence matches the network's own rounding (finalRoundConsensus, not a hand-rolled copy)", async () => {
+  const v = await deliberate({
+    question: "q",
+    agents: [fixed(0.9), fixed(0.92), fixed(0.88), fixed(0.91)],
+    rounds: 1,
+  });
+  // finalRoundConsensus always rounds confidence via Number(x.toFixed(4)) —
+  // this fails if deliberate() ever goes back to a hand-rolled copy that
+  // returns an unrounded float.
+  assert.equal(v.confidence, Number(v.confidence.toFixed(4)));
+});

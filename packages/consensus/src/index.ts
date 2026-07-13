@@ -12,6 +12,7 @@ import {
   answerDistance,
   crossInhibitionConsensus,
   diversityMultipliers,
+  finalRoundConsensus,
   interimRoundAggregate,
   DIVERSITY_EPSILON,
   MIN_QUESTIONS_FOR_DIVERSITY,
@@ -83,10 +84,6 @@ function toAnswer(r: AgentResponse): Answer {
   return typeof r.answer === "number" ? { ...base, p: r.answer } : { ...base, choice: String(r.answer) };
 }
 
-function isBinaryRound(answers: Answer[]): boolean {
-  return answers.length > 0 && answers.every((a) => a.p != null);
-}
-
 // Duplicates the union-find pass diversityMultipliers runs internally, using
 // the same distance function + epsilon, so deliberate() can also report WHICH
 // agents clustered together — information the network's own API never needs
@@ -115,41 +112,6 @@ function clusterAgents(submissions: { agent_id: string; answers: Answer[] }[], q
   return [...groups.values()].map((members) => ({ members, multiplier: 1 / members.length }));
 }
 
-// Same math as finalRoundConsensus in @swarming/protocol (diversity-weighted
-// support into crossInhibitionConsensus), inlined only because that helper
-// hardcodes the engine's default quorum — deliberate()'s frozen API needs to
-// pass its own `quorum` option through to the same crossInhibitionConsensus
-// call, which finalRoundConsensus's signature doesn't expose.
-function finalConsensus(
-  submissions: { agent_id: string; answers: Answer[] }[],
-  question: Question,
-  quorum: number | undefined,
-): { decision: number | string | null; confidence: number; committed: boolean } {
-  const div = diversityMultipliers(submissions, [question]);
-  if (question.type === "binary") {
-    let yes = 0, no = 0;
-    for (const s of submissions) {
-      const a = s.answers.find((x) => x.q_id === question.q_id);
-      if (!a || a.p == null) continue;
-      const w = div.get(s.agent_id) ?? 1;
-      yes += w * a.p;
-      no += w * (1 - a.p);
-    }
-    const c = crossInhibitionConsensus([{ id: "yes", support: yes }, { id: "no", support: no }], { quorum });
-    return { decision: c.committed ? (c.choice === "yes" ? 1 : 0) : (yes >= no ? 1 : 0), confidence: c.confidence, committed: c.committed };
-  }
-  const votes: Record<string, number> = {};
-  for (const s of submissions) {
-    const a = s.answers.find((x) => x.q_id === question.q_id);
-    if (!a || !a.choice) continue;
-    const w = div.get(s.agent_id) ?? 1;
-    votes[a.choice] = (votes[a.choice] ?? 0) + w;
-  }
-  const entries = Object.entries(votes).sort((x, y) => y[1] - x[1]);
-  const c = crossInhibitionConsensus(entries.map(([id, support]) => ({ id, support })), { quorum });
-  return { decision: c.committed ? c.choice : (entries[0]?.[0] ?? null), confidence: c.confidence, committed: c.committed };
-}
-
 /**
  * Run N independent agents through the swarm's structured deliberation:
  * blind answers, diversity-weighted interim leaning shared back, quorum
@@ -173,20 +135,35 @@ export async function deliberate(opts: DeliberateOptions): Promise<Verdict> {
   const transcript: Turn[] = [];
   let leaning: Leaning | undefined;
   let lastSubmissions: { agent_id: string; answers: Answer[] }[] = [];
-  let question_: Question = { q_id: Q_ID, type: "binary", text: question, resolution: { source: "library", rule: "deliberate", resolve_at: "" } };
+  const resolution = { source: "library", rule: "deliberate", resolve_at: "" };
+  let question_: Question = { q_id: Q_ID, type: "binary", text: question, resolution };
 
   for (let round = 1; round <= rounds; round++) {
     const responses = await Promise.all(agents.map((agent) => agent({ question, round, leaning })));
-    const submissions = responses.map((r, i) => ({ agent_id: String(i), answers: [toAnswer(r)] }));
     for (let i = 0; i < responses.length; i++) {
       const r = responses[i];
       transcript.push({ round, agent: i, answer: r.answer, confidence: r.confidence, rationale: r.rationale });
     }
+
+    // Agents can disagree on answer shape (a number vs. a string) in the same
+    // round — the frozen API's `answer: string | number` doesn't force a
+    // fixed type. The MAJORITY shape decides the round's type; answers of
+    // the minority shape are excluded from the tally (they'd have no honest
+    // representation as the other type) but stay visible in `transcript` —
+    // never silently misread as the round's winner the way an "every answer
+    // must agree" check would (a lone dissenting string used to make an
+    // entire numeric majority disappear from the vote).
+    const numericCount = responses.filter((r) => typeof r.answer === "number").length;
+    const isBinary = numericCount >= responses.length - numericCount;
+    const submissions = responses
+      .map((r, i) => ({ agent_id: String(i), answer: toAnswer(r) }))
+      .filter((s) => (isBinary ? s.answer.p != null : s.answer.choice != null))
+      .map((s) => ({ agent_id: s.agent_id, answers: [s.answer] }));
+
     lastSubmissions = submissions;
-    const allAnswers = submissions.flatMap((s) => s.answers);
-    question_ = isBinaryRound(allAnswers)
-      ? { q_id: Q_ID, type: "binary", text: question, resolution: question_.resolution }
-      : { q_id: Q_ID, type: "choice", text: question, choices: [...new Set(allAnswers.map((a) => a.choice ?? ""))], resolution: question_.resolution };
+    question_ = isBinary
+      ? { q_id: Q_ID, type: "binary", text: question, resolution }
+      : { q_id: Q_ID, type: "choice", text: question, choices: [...new Set(submissions.map((s) => s.answers[0].choice!))], resolution };
 
     if (round < rounds) {
       const aggregate = interimRoundAggregate(submissions, [question_]);
@@ -194,13 +171,13 @@ export async function deliberate(opts: DeliberateOptions): Promise<Verdict> {
     }
   }
 
-  const consensus = finalConsensus(lastSubmissions, question_, opts.quorum);
+  const consensus = finalRoundConsensus(lastSubmissions, [question_], { quorum: opts.quorum })[Q_ID];
   const clusters = clusterAgents(lastSubmissions, [question_]);
 
   return {
-    answer: consensus.decision,
-    confidence: consensus.confidence,
-    committed: consensus.committed,
+    answer: consensus?.decision ?? null,
+    confidence: consensus?.confidence ?? 0,
+    committed: consensus?.committed ?? false,
     rounds,
     clusters,
     transcript,

@@ -205,6 +205,7 @@ export interface RoundConsensusEntry {
 export function finalRoundConsensus(
   submissions: AgentSubmission[],
   questions: Question[],
+  opts: { quorum?: number } = {},
 ): Record<string, RoundConsensusEntry> {
   if (submissions.length === 0) return {};
   const div = diversityMultipliers(submissions, questions);
@@ -219,7 +220,7 @@ export function finalRoundConsensus(
         yes += w * a.p;
         no += w * (1 - a.p);
       }
-      const c = crossInhibitionConsensus([{ id: "yes", support: yes }, { id: "no", support: no }]);
+      const c = crossInhibitionConsensus([{ id: "yes", support: yes }, { id: "no", support: no }], { quorum: opts.quorum });
       const tot = yes + no || 1;
       out[q.q_id] = {
         decision: c.committed ? (c.choice === "yes" ? 1 : 0) : (yes >= no ? 1 : 0),
@@ -236,7 +237,7 @@ export function finalRoundConsensus(
         votes[a.choice] = (votes[a.choice] ?? 0) + w;
       }
       const entries = Object.entries(votes).sort((x, y) => y[1] - x[1]);
-      const c = crossInhibitionConsensus(entries.map(([id, support]) => ({ id, support })));
+      const c = crossInhibitionConsensus(entries.map(([id, support]) => ({ id, support })), { quorum: opts.quorum });
       out[q.q_id] = {
         decision: c.committed ? c.choice : (entries[0]?.[0] ?? null),
         confidence: Number(c.confidence.toFixed(4)),

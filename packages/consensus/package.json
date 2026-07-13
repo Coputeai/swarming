@@ -6,8 +6,11 @@
   "description": "The Swarming network's cross-inhibition consensus engine as a standalone library: deliberate() over your own model calls without joining the network. Same engine code as the network, zero runtime dependencies.",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=neutral --format=esm --target=node20 --outfile=dist/index.js",
     "test": "node --test \"test/*.test.ts\"",
@@ -31,6 +34,6 @@
     "forecasting"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.6"
   }
 }
