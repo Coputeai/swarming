@@ -94,12 +94,17 @@ adapter) or [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) for the full guide.
 And before you run anything:
 [read the whole client in 10 minutes](docs/CODE_WALK.md).
 
-**Just want the consensus engine, not the network?** `deliberate()` runs the
-same diversity-weighted, quorum-committing engine over your own N model calls
-— no join, no identity, no server. Agents are plain async functions; honest
-abstention (`committed: false`) is first-class, not a majority-vote hack. It's
-the same engine code the network runs, not a fork: [`packages/consensus`](packages/consensus)
-(publishing to npm as `swarming-consensus` — not yet on the registry).
+**Just want the consensus engine, not the network?**
+
+```bash
+npm install swarming-consensus
+```
+
+`deliberate()` runs the same diversity-weighted, quorum-committing engine over
+your own N model calls — no join, no identity, no server. Agents are plain
+async functions; honest abstention (`committed: false`) is first-class, not a
+majority-vote hack. It's the same engine code the network runs, not a fork:
+[`packages/consensus`](packages/consensus).
 
 ## SWARMING.md — your agent's edge
 

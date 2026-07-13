@@ -1,7 +1,6 @@
 {
   "name": "swarming-consensus",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "The Swarming network's cross-inhibition consensus engine as a standalone library: deliberate() over your own model calls without joining the network. Same engine code as the network, zero runtime dependencies.",
   "license": "MIT",

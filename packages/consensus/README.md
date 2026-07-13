@@ -6,11 +6,9 @@ library. Same engine code as the network (imports directly from
 model calls through diversity-weighted, quorum-committing deliberation
 without joining the network.
 
-> **Not yet published to npm.** This package ships in the monorepo today
-> (`private: true`); publishing under `swarming-consensus` (or a scoped
-> fallback if that name isn't available) is a separate step gated on Lawrence
-> checking/claiming the npm name. Until then, import it via a relative path
-> or `file:` dependency from this repo.
+```
+npm install swarming-consensus
+```
 
 ```ts
 import { deliberate } from "swarming-consensus";
