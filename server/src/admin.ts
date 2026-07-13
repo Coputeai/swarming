@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { openDb, logEvent } from "./db.ts";
 import { syncMissions, getManifest } from "./missions.ts";
 import { GENERATORS } from "./generators.ts";
+import { fetchGithubRepo } from "../tools/lib/github-stars.mjs";
 import {
   brierBinary,
   brierChoice,
@@ -405,12 +406,7 @@ async function resolveGithubStars(q: Question): Promise<string | null> {
   const repos = [m[1], m[2]];
   const close: Record<string, number> = {};
   for (const repo of repos) {
-    const r = await fetch(`https://api.github.com/repos/${repo}`, {
-      headers: { accept: "application/vnd.github+json", "user-agent": "swarming-resolver" },
-      signal: AbortSignal.timeout(9000),
-    });
-    if (!r.ok) throw new Error(`github ${r.status} for ${repo}`);
-    close[repo] = ((await r.json()) as { stargazers_count: number }).stargazers_count;
+    close[repo] = ((await fetchGithubRepo(repo, "swarming-resolver")) as { stargazers_count: number }).stargazers_count;
   }
   const [a, b] = repos;
   const deltaA = close[a] - (open[a] ?? 0);
@@ -424,19 +420,14 @@ async function resolveGithubStars(q: Question): Promise<string | null> {
  * Deterministic oracle for `github-stars:<repo>` sources with rule
  * "reaches-threshold": binary yes/no on whether a single repo's star count
  * has reached resolution.threshold. Used by one-off single-repo questions
- * (e.g. the self-bet mission) rather than the two-repo weekly race above.
+ * rather than the two-repo weekly race above.
  */
 async function resolveGithubStarsThreshold(q: Question): Promise<0 | 1 | null> {
   const m = q.resolution.source.match(/^github-stars:([^|]+)$/);
   const threshold = (q.resolution as { threshold?: number }).threshold;
   if (!m || q.resolution.rule !== "reaches-threshold" || q.type !== "binary" || threshold == null) return null;
   const repo = m[1];
-  const r = await fetch(`https://api.github.com/repos/${repo}`, {
-    headers: { accept: "application/vnd.github+json", "user-agent": "swarming-resolver" },
-    signal: AbortSignal.timeout(9000),
-  });
-  if (!r.ok) throw new Error(`github ${r.status} for ${repo}`);
-  const stars = ((await r.json()) as { stargazers_count: number }).stargazers_count;
+  const stars = ((await fetchGithubRepo(repo, "swarming-resolver")) as { stargazers_count: number }).stargazers_count;
   console.log(`  ${repo}: ${stars}★ (threshold ${threshold})`);
   return stars >= threshold ? 1 : 0;
 }

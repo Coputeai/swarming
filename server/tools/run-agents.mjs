@@ -11,36 +11,14 @@
 import { openDb } from "../src/db.ts";
 import { buildPrompt, parseAnswers } from "../../packages/cli/src/predict.ts";
 import { fetchSource } from "../../packages/cli/src/tools.ts";
+import { HOUSE_AGENT_ROSTER, callAgent, provisionHouseAgent } from "./lib/house-agents.mjs";
 
 const db = openDb();
 const nowIso = new Date().toISOString();
 
-// Each agent reads a DIFFERENT data source — divergence comes from what they
-// look at, not just which model they are. All providers are OpenAI-compatible
-// chat endpoints; the key comes from the named env var (never hardcoded).
-const agents = [
-  { name: "deepseek-pro",   mc: "deepseek/deepseek-v4-pro",   url: "https://api.deepseek.com/chat/completions",                                keyEnv: "DEEPSEEK_API_KEY", model: "deepseek-v4-pro",   source: "odds:all" },
-  { name: "deepseek-flash", mc: "deepseek/deepseek-v4-flash", url: "https://api.deepseek.com/chat/completions",                                keyEnv: "DEEPSEEK_API_KEY", model: "deepseek-v4-flash", source: "record:all" },
-  { name: "llama31",        mc: "gemini/gemini-2.5-flash",    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", keyEnv: "GEMINI_API_KEY",   model: "gemini-2.5-flash",  source: "goaldiff:all" },
-  { name: "qwen25",         mc: "groq/qwen3-32b",             url: "https://api.groq.com/openai/v1/chat/completions",                          keyEnv: "GROQ_API_KEY",     model: "qwen/qwen3-32b",    source: "goals:all" },
-];
-let n = 0;
-const roster = [];
-for (const a of agents) {
-  n += 1; a.id = "agent_st_" + a.name;
-  // A deceased agent stays deceased — the harness must never re-subscribe or
-  // answer for it, even if it's still listed above (deletion is permanent).
-  const prior = db.prepare("SELECT status FROM agents WHERE agent_id = ?").get(a.id);
-  if (prior?.status === "deceased") { console.log(`${a.name}: deceased — skipping`); continue; }
-  // create-if-missing at cold-start baseline; NEVER overwrite earned reputation
-  db.prepare(`INSERT OR IGNORE INTO agents (agent_id,pubkey,name,agent_number,model_class,capabilities_json,created_at,last_seen_at,skill,points,streak,tier_index,scored_count)
-              VALUES (?,?,?,?,?,'["llm.reasoning","data.read"]',?,?,0.5,0,0,0,0)`)
-    .run(a.id, "pk_st_" + a.name, a.name, 100 + n, a.mc, nowIso, nowIso);
-  // keep the model label honest if an agent's underlying model was swapped
-  db.prepare("UPDATE agents SET model_class = ?, last_seen_at = ? WHERE agent_id = ?").run(a.mc, nowIso, a.id);
-  db.prepare("INSERT OR REPLACE INTO subscriptions (agent_id,mission_id,enabled,updated_at) VALUES (?, 'claim-check', 1, ?)").run(a.id, nowIso);
-  roster.push(a);
-}
+const roster = HOUSE_AGENT_ROSTER
+  .map((a, i) => provisionHouseAgent(db, a, 100 + i + 1, "claim-check", nowIso))
+  .filter((a) => a !== null);
 
 // Open workunits whose kickoff hasn't passed — picks lock at kickoff.
 const wus = db.prepare(
@@ -62,22 +40,6 @@ const slateTeams = new Set();
 for (const q of questions) for (const c of (q.choices ?? [])) slateTeams.add(c);
 
 const SWARMING_MD = "Independent forecaster. Weigh your live data heavily; only diverge from what it indicates when you have a concrete reason. Calibrate honestly.";
-
-async function call(a, prompt) {
-  const key = process.env[a.keyEnv];
-  if (!key) throw new Error(`missing env ${a.keyEnv}`);
-  const r = await fetch(a.url, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: a.model, messages: [{ role: "user", content: prompt }] }),
-    signal: AbortSignal.timeout(120_000),
-  });
-  if (!r.ok) throw new Error(`${a.model} HTTP ${r.status}`);
-  const content = (await r.json()).choices[0].message.content;
-  // reasoning models (e.g. qwen3) may emit <think>…</think> before the JSON —
-  // strip it so stray brackets in the reasoning can't corrupt parsing
-  return String(content).replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-}
 
 // Parse a team-keyed blob ("PREFIX — Team val; Team val; ...") into Team->val.
 function teamMap(ctx) {
@@ -118,7 +80,7 @@ for (const a of roster) {
   const prompt = buildPrompt(task, a.name, SWARMING_MD);
   let ans = null;
   for (let i = 0; i < 2 && !ans; i++) {
-    try { ans = parseAnswers(await call(a, prompt), questions); }
+    try { ans = parseAnswers(await callAgent(a, prompt), questions); }
     catch (e) { if (i === 1) console.log(a.name + " FAILED: " + e.message); }
   }
   if (!ans) continue;
