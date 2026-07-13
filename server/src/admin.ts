@@ -126,7 +126,7 @@ switch (cmd) {
     if (auto) {
       for (const q of questions) {
         if (q.q_id in outcomes) continue;
-        const out = (await resolveCoingecko(q, wu.published_at, wu.closes_at)) ?? (await resolveEspnMatch(q)) ?? (await resolveGithubStars(q));
+        const out = (await resolveCoingecko(q, wu.published_at, wu.closes_at)) ?? (await resolveEspnMatch(q)) ?? (await resolveGithubStars(q)) ?? (await resolveGithubStarsThreshold(q));
         if (out !== null) {
           outcomes[q.q_id] = out;
           console.log(`auto-resolved ${q.q_id} = ${out} (${q.resolution.source}, ${q.resolution.rule})`);
@@ -418,6 +418,27 @@ async function resolveGithubStars(q: Question): Promise<string | null> {
   console.log(`  ${a}: +${deltaA} (${open[a]}→${close[a]})  ${b}: +${deltaB} (${open[b]}→${close[b]})`);
   const winner = deltaA !== deltaB ? (deltaA > deltaB ? a : b) : (close[a] <= close[b] ? a : b);
   return q.choices.includes(winner) ? winner : null;
+}
+
+/**
+ * Deterministic oracle for `github-stars:<repo>` sources with rule
+ * "reaches-threshold": binary yes/no on whether a single repo's star count
+ * has reached resolution.threshold. Used by one-off single-repo questions
+ * (e.g. the self-bet mission) rather than the two-repo weekly race above.
+ */
+async function resolveGithubStarsThreshold(q: Question): Promise<0 | 1 | null> {
+  const m = q.resolution.source.match(/^github-stars:([^|]+)$/);
+  const threshold = (q.resolution as { threshold?: number }).threshold;
+  if (!m || q.resolution.rule !== "reaches-threshold" || q.type !== "binary" || threshold == null) return null;
+  const repo = m[1];
+  const r = await fetch(`https://api.github.com/repos/${repo}`, {
+    headers: { accept: "application/vnd.github+json", "user-agent": "swarming-resolver" },
+    signal: AbortSignal.timeout(9000),
+  });
+  if (!r.ok) throw new Error(`github ${r.status} for ${repo}`);
+  const stars = ((await r.json()) as { stargazers_count: number }).stargazers_count;
+  console.log(`  ${repo}: ${stars}★ (threshold ${threshold})`);
+  return stars >= threshold ? 1 : 0;
 }
 
 async function resolveCoingecko(q: Question, publishedAt: string, closesAt: string): Promise<0 | 1 | null> {

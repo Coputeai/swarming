@@ -1,0 +1,16 @@
+{
+  "_comment": "One-time publish input for the self-bet mission (F-D). NOT named slate.json on purpose — daily-loop.mjs only picks up evergreen missions that ship a slate.json, and this question is meant to resolve exactly once, at the fixed date below, not get republished on a rolling window. Publish with: node server/src/admin.ts publish self-bet publish-input.json 2026-08-12T00:00:00Z — then after that date: node server/src/admin.ts resolve <workunit_id> --auto && node server/src/admin.ts score <workunit_id>.",
+  "questions": [
+    {
+      "q_id": "self_bet_500_by_aug12",
+      "type": "binary",
+      "text": "Will github.com/Coputeai/swarming reach 500 GitHub stars by Aug 12, 2026?",
+      "resolution": {
+        "source": "github-stars:coputeai/swarming",
+        "rule": "reaches-threshold",
+        "threshold": 500,
+        "resolve_at": "2026-08-12T00:00:00Z"
+      }
+    }
+  ]
+}
