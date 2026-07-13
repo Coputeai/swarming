@@ -57,9 +57,13 @@ const admin = (args) => execFileSync(process.execPath, [adminTs, ...args], { enc
 
 const missions = db.prepare("SELECT mission_id, manifest_json FROM missions WHERE status = 'active'").all()
   .map((r) => JSON.parse(r.manifest_json))
-  .filter((m) => AUTO_RESOLVERS.has(m.verification?.resolver) && existsSync(join(missionsDir, m.id, "slate.json")));
+  // evergreen !== false is a second, structural line of defense for one-off
+  // missions (mission.yaml declares it explicitly) — a slate.json accidentally
+  // added later (e.g. by copy-pasting another mission's template) still
+  // won't pull a one-off mission into the auto-loop on its own.
+  .filter((m) => m.evergreen !== false && AUTO_RESOLVERS.has(m.verification?.resolver) && existsSync(join(missionsDir, m.id, "slate.json")));
 
-if (missions.length === 0) { console.log("daily-loop: no evergreen missions (need slate.json + auto resolver)"); process.exit(0); }
+if (missions.length === 0) { console.log("daily-loop: no evergreen missions (need slate.json + auto resolver + evergreen !== false)"); process.exit(0); }
 
 for (const m of missions) {
   // 1) settle everything past its close (a failed oracle just waits for the next run)

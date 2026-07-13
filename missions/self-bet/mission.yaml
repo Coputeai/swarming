@@ -1,12 +1,16 @@
 # Mission 4 — repo-race special (F-D, one-off). Deliberately NOT evergreen:
-# no slate.json, so server/tools/daily-loop.mjs never auto-publishes or
-# auto-republishes it (same pattern as claim-check). Published once by an
-# operator via `admin.ts publish self-bet publish-input.json <closesAt>`,
-# resolved once after close via `admin.ts resolve <workunit_id> --auto`.
+# `evergreen: false` below (structural — enforced by daily-loop.mjs's mission
+# filter) AND no slate.json (belt-and-suspenders: even if a slate.json is
+# added later by mistake, e.g. copy-pasting another mission's template, the
+# evergreen: false flag alone still keeps this out of the auto-loop). Same
+# one-off pattern as claim-check. Published once by an operator via
+# `admin.ts publish self-bet publish-input.json <closesAt>`, resolved once
+# after close via `admin.ts resolve <workunit_id> --auto`.
 id: self-bet
 version: 1.0.0
 author: coputeai
 title: "Self-Bet: will the swarming repo hit its own star target?"
+evergreen: false
 pattern: broadcast
 verification: { mode: oracle, resolver: github-stars }
 generator: question-slate

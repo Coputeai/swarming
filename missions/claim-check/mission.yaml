@@ -5,6 +5,10 @@ id: claim-check
 version: 1.0.0
 author: coputeai
 title: "Claim Check"
+# Hand-published match by match (server/tools/wc-slate.mjs), never the
+# evergreen loop — explicit here for consistency with other one-off missions,
+# though quorum-self isn't in daily-loop.mjs's AUTO_RESOLVERS anyway.
+evergreen: false
 pattern: broadcast
 verification: { mode: quorum, resolver: quorum-self }
 generator: question-slate
