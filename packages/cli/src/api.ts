@@ -1,6 +1,6 @@
 // Tiny dispatch client. Friendly errors, never a stack trace (BLUEPRINT §4.2).
 
-import { API_BASE } from "./config.ts";
+import { API_BASE, BOARD_BASE } from "./config.ts";
 
 export class ApiError extends Error {
   code: string;
@@ -17,10 +17,10 @@ export function setApiKey(key: string | undefined | null): void {
   apiKey = key ?? null;
 }
 
-async function request(method: string, path: string, body?: unknown): Promise<unknown> {
+async function request(method: string, base: string, path: string, body?: unknown): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(API_BASE + path, {
+    res = await fetch(base + path, {
       method,
       headers: {
         ...(body ? { "content-type": "application/json" } : {}),
@@ -43,6 +43,9 @@ async function request(method: string, path: string, body?: unknown): Promise<un
 }
 
 export const api = {
-  get: (path: string) => request("GET", path),
-  post: (path: string, body: unknown) => request("POST", path, body),
+  get: (path: string) => request("GET", API_BASE, path),
+  post: (path: string, body: unknown) => request("POST", API_BASE, path, body),
+  // Board reads (leaderboard, profiles, badges) live at the domain root, not
+  // under /api — see BOARD_BASE in config.ts.
+  board: (path: string) => request("GET", BOARD_BASE, path),
 };

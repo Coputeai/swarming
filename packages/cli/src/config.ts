@@ -9,6 +9,12 @@ import { generateKeypair, publicKeyRawFromSeed } from "../../protocol/src/index.
 
 export const API_BASE = process.env.SWARMING_API ?? "https://swarming.copute.ai/api";
 
+// The board (leaderboard/profile/badge) lives on the WC-showcase process,
+// exposed at the bare domain root — NOT under /api (see
+// ops/nginx-public-api.conf: /v1/board/leaderboard, /a/*, /badge/* are root
+// locations; only work/results/missions/stats/register are under /api/*).
+export const BOARD_BASE = process.env.SWARMING_BOARD ?? API_BASE.replace(/\/api\/?$/, "");
+
 export function configDir(): string {
   return process.env.SWARMING_HOME ?? join(homedir(), ".swarming");
 }
