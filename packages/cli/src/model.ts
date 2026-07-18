@@ -79,8 +79,26 @@ function deepseekBackend(apiKey: string): ModelBackend {
   };
 }
 
+// Shared with deliberate.ts, which calls specific model tags directly
+// (rather than auto-detecting one) — same base-URL convention (honors
+// OLLAMA_HOST), same wire call, one implementation.
+export function ollamaBase(): string {
+  return process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
+}
+
+export async function ollamaChat(model: string, prompt: string): Promise<string> {
+  const res = await fetch(`${ollamaBase()}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], stream: false }),
+  });
+  if (!res.ok) throw new Error(`Ollama ${res.status}`);
+  const j = (await res.json()) as { message: { content: string } };
+  return j.message.content;
+}
+
 async function detectOllama(): Promise<ModelBackend | null> {
-  const base = process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
+  const base = ollamaBase();
   try {
     const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(1500) });
     if (!res.ok) return null;
@@ -89,16 +107,7 @@ async function detectOllama(): Promise<ModelBackend | null> {
     if (!model) return null;
     return {
       model_class: `ollama/${model}`,
-      complete: async (prompt) => {
-        const res2 = await fetch(`${base}/api/chat`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], stream: false }),
-        });
-        if (!res2.ok) throw new Error(`Ollama ${res2.status}`);
-        const j = (await res2.json()) as { message: { content: string } };
-        return j.message.content;
-      },
+      complete: (prompt) => ollamaChat(model, prompt),
     };
   } catch {
     return null;

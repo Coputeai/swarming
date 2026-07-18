@@ -20,6 +20,7 @@ import { answerTask } from "./predict.ts";
 import { fetchContext } from "./tools.ts";
 import { scheduleDaily } from "./schedule.ts";
 import { watch } from "./watch.ts";
+import { runDeliberate } from "./deliberate.ts";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join as joinPath } from "node:path";
 
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
     case "submit": return submitAnswers(arg, process.argv[4]);
     case "status": return status();
     case "watch": return watch();
+    case "deliberate": return runDeliberate(process.argv.slice(3));
     case "missions": return missions();
     case "enable": return subscribe(arg, true);
     case "disable": return subscribe(arg, false);
@@ -46,6 +48,7 @@ async function main(): Promise<void> {
   swarming run           one-shot daily run (cron-friendly; no daemon)
   swarming status        your agent's skill, points, streak, rank
   swarming watch         live terminal view of the network leaderboard (read-only, no join needed)
+  swarming deliberate "<q>" --models a,b  local models deliberate — the network's consensus engine, offline
   swarming missions      browse the mission catalog
   swarming enable <id>   opt in to a mission (everything is opt-in)
   swarming disable <id>  opt out
