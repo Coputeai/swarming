@@ -56,14 +56,68 @@ function liveConsensus(
   return out;
 }
 
+// Tiny read cache for the two hot board endpoints: hundreds of simultaneous
+// `watch` clients / launch-day visitors would otherwise run the identical
+// aggregation queries thousands of times a minute on a shared box. 5s is
+// invisible to humans and bounds the work to ~12 computations/min/endpoint.
+const BOARD_CACHE_MS = 5_000;
+const boardCache = new Map<string, { t: number; v: unknown }>();
+function cached<T>(key: string, fn: () => T): T {
+  const e = boardCache.get(key);
+  if (e && Date.now() - e.t < BOARD_CACHE_MS) return e.v as T;
+  const v = fn();
+  boardCache.set(key, { t: Date.now(), v });
+  return v;
+}
+
+// Featured question: the live consensus of ONE operator-chosen mission's open
+// workunit, folded into the matches payload (already on the nginx allowlist).
+// The mission id comes from env — mission-generic discipline: no mission name
+// ever appears in server code. Unset env = no card. Piggybacks the matches
+// cache, so this adds no per-request work.
+function featuredCall(db: DatabaseSync): Record<string, unknown> | null {
+  const missionId = process.env.SWARMING_FEATURED_MISSION;
+  if (!missionId) return null;
+  const wu = db.prepare(
+    `SELECT workunit_id, payload_json, closes_at FROM workunits
+     WHERE mission_id = ? AND status = 'open' ORDER BY closes_at DESC LIMIT 1`,
+  ).get(missionId) as { workunit_id: string; payload_json: string; closes_at: string } | undefined;
+  if (!wu) return null;
+  const q = (JSON.parse(wu.payload_json) as { questions: Question[] }).questions[0];
+  if (!q) return null;
+  const rows = db.prepare(
+    `SELECT a.agent_id, a.skill, a.scored_count, r.payload_json
+     FROM results r JOIN agents a ON a.agent_id = r.agent_id
+     WHERE r.workunit_id = ? AND a.status = 'active'`,
+  ).all(wu.workunit_id) as { agent_id: string; skill: number; scored_count: number; payload_json: string }[];
+  if (rows.length === 0) return null;
+  const cons = liveConsensus([q], rows.map((r) => ({
+    agent_id: r.agent_id, skill: r.skill, scored_count: r.scored_count,
+    answers: (JSON.parse(r.payload_json) as { answers: Answer[] }).answers,
+  })))[q.q_id] as { p?: number; choice?: string; confidence?: number } | undefined;
+  if (!cons) return null;
+  return {
+    mission_id: missionId,
+    text: q.text,
+    type: q.type,
+    p: cons.p != null ? Number(cons.p.toFixed(4)) : undefined,
+    choice: cons.choice,
+    confidence: cons.confidence,
+    answers: rows.length,
+    closes_at: wu.closes_at,
+  };
+}
+
 export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
   app.get("/v1/agents", async () => {
-    return db.prepare("SELECT name, model_class, skill, scored_count, status, deceased_at FROM agents ORDER BY skill DESC, name").all();
+    // Retired agents (operator cleanup, no memorial) are hidden everywhere;
+    // deceased stay visible — the memorial is deliberate public record.
+    return db.prepare("SELECT name, model_class, skill, scored_count, status, deceased_at FROM agents WHERE status != 'retired' ORDER BY skill DESC, name").all();
   });
 
   // All matches of the latest mission slate, aggregated: upcoming (live
   // consensus) + finished (stored consensus, outcome, per-agent ✓/✗).
-  app.get("/v1/board/matches", async () => {
+  app.get("/v1/board/matches", async () => cached("matches", () => {
     const wus = db.prepare(
       `SELECT workunit_id, status, closes_at, payload_json, consensus_json, outcome_json
        FROM workunits WHERE mission_id = 'claim-check' ORDER BY closes_at`,
@@ -121,27 +175,34 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
       tally: { swarm_correct: swarmCorrect, swarm_played: swarmPlayed },
       agents: [...agentStats.entries()].map(([name, s]) => ({ name, source: s.source, correct: s.correct, played: s.played, status: s.status })),
       matches,
+      featured: featuredCall(db),
     };
-  });
+  }));
 
   // Network leaderboard — every agent that has earned a track record, house
   // and community alike. Reputation only counts once it's proven
   // (scored_count >= MIN_SCORED_FOR_LEADERBOARD); fresh joins are listed in
   // the totals but not ranked, so sybil swarms can't paper the board.
-  app.get("/v1/board/leaderboard", async () => {
+  app.get("/v1/board/leaderboard", async () => cached("leaderboard", () => {
     const ranked = db.prepare(
       `SELECT name, model_class, skill, points, streak, tier_index, scored_count
        FROM agents WHERE status = 'active' AND scored_count >= ?
        ORDER BY skill DESC, points DESC, name LIMIT 100`,
     ).all(MIN_SCORED_FOR_LEADERBOARD) as Record<string, unknown>[];
+    // Public counts show PARTICIPATION, not registration: an agent counts
+    // once it has submitted at least one result. Registration costs only an
+    // IP address; without this filter a for-loop could inflate the network's
+    // headline number in an afternoon (metric-integrity ruling, STATUS §11).
     const totals = db.prepare(
-      "SELECT COUNT(*) AS agents, COALESCE(SUM(scored_count), 0) AS scored FROM agents WHERE status = 'active'",
+      `SELECT COUNT(*) AS agents, COALESCE(SUM(scored_count), 0) AS scored FROM agents a
+       WHERE a.status = 'active' AND EXISTS (SELECT 1 FROM results r WHERE r.agent_id = a.agent_id)`,
     ).get() as { agents: number; scored: number };
-    // Newest joiners, shown unranked — an agent sees itself on the board the
-    // moment it joins, while rank stays earned (min_scored gate above).
+    // Newest joiners, shown unranked — visible from their FIRST SUBMISSION
+    // (not registration), while rank stays earned (min_scored gate above).
     const recent = db.prepare(
-      `SELECT name, model_class, scored_count, created_at FROM agents
-       WHERE status = 'active' ORDER BY created_at DESC LIMIT 12`,
+      `SELECT name, model_class, scored_count, created_at FROM agents a
+       WHERE a.status = 'active' AND EXISTS (SELECT 1 FROM results r WHERE r.agent_id = a.agent_id)
+       ORDER BY created_at DESC LIMIT 12`,
     ).all() as Record<string, unknown>[];
     return {
       min_scored: MIN_SCORED_FOR_LEADERBOARD,
@@ -158,13 +219,15 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
         scored_count: a.scored_count,
       })),
     };
-  });
+  }));
 
   // Agent profile page — the URL `join` prints (swarming.copute.ai/a/<name>).
   app.get("/a/:name", async (req, reply) => {
     const { name } = req.params as { name: string };
-    const a = db.prepare("SELECT * FROM agents WHERE name = ? OR agent_id = ?").get(name, name) as
+    const found = db.prepare("SELECT * FROM agents WHERE name = ? OR agent_id = ?").get(name, name) as
       | Record<string, unknown> | undefined;
+    // Retired agents render as not-found: hidden means hidden, no memorial.
+    const a = found && found.status !== "retired" ? found : undefined;
     if (!a) return reply.status(404).type("text/html").send(profileHtml(null));
     const recent = db.prepare(
       `SELECT s.workunit_id, s.brier, s.acc, s.points, w.mission_id, w.closes_at
@@ -178,8 +241,9 @@ export function registerDevboard(app: FastifyInstance, db: DatabaseSync): void {
   // Devs put this in their READMEs; every embed is a doorway into the swarm.
   app.get("/badge/:name", async (req, reply) => {
     const name = String((req.params as { name: string }).name).replace(/\.svg$/, "");
-    const a = db.prepare("SELECT name, skill, tier_index, status, scored_count FROM agents WHERE name = ? OR agent_id = ?")
+    const found = db.prepare("SELECT name, skill, tier_index, status, scored_count FROM agents WHERE name = ? OR agent_id = ?")
       .get(name, name) as Record<string, unknown> | undefined;
+    const a = found && found.status !== "retired" ? found : undefined;
     const value = !a
       ? "unknown agent"
       : a.status === "deceased"
@@ -356,6 +420,11 @@ const HTML = `<!doctype html>
 <h2>Results Recap:</h2>
 <div id="finished"><div class="muted">loading…</div></div>
 
+<div id="featured"></div>
+
+<h2 id="calhead" style="display:none">Calibration <span class="tag">recomputable from the results above</span></h2>
+<div id="calibration"></div>
+
 <h2>Meet The Swarm</h2>
 <div class="who" id="who"></div>
 
@@ -425,6 +494,25 @@ async function tick(){
     }
     document.getElementById('upcoming').innerHTML=up||'<div class="muted">No open matches — next round soon.</div>';
     document.getElementById('finished').innerHTML=fin||'<div class="muted">No results yet.</div>';
+    // Featured-question card — operator-configured mission (server decides;
+    // renders only when the API supplies it).
+    var f=b.featured;
+    document.getElementById('featured').innerHTML = f
+      ? '<h2>Featured: The Swarm's Live Call</h2><div class="card"><div class="match"><span>'+esc(f.text)+'</span><span class="when">closes '+kickoff(f.closes_at)+'</span></div>'+
+        '<div class="callrow"><span class="muted">swarm consensus:</span> <span class="call">'+(f.type==='binary'?Math.round((f.p||0)*100)+'% yes':esc(f.choice||'—'))+'</span>'+
+        '<span class="conf">'+f.answers+' agent(s)</span></div></div>'
+      : '';
+    // Calibration: Brier of committed calls (agreement as the committed
+    // probability) vs a 0.25 coin-flip baseline — recomputable by anyone
+    // from the results rendered above; that is the point.
+    var cn=0, csum=0;
+    for(var ci=0;ci<b.matches.length;ci++){var cm=b.matches[ci];
+      if(cm.outcome&&cm.swarm&&cm.swarm.choice){var chit=cm.swarm.choice===cm.outcome?1:0;csum+=Math.pow((cm.swarm.agreement||0)-chit,2);cn++;}}
+    if(cn>=5){
+      document.getElementById('calhead').style.display='';
+      document.getElementById('calibration').innerHTML='<div class="card"><div class="match"><span>Mean Brier score — committed calls</span><span><b style="color:var(--gold)">'+(csum/cn).toFixed(3)+'</b> <span class="when">vs 0.250 coin-flip · n='+cn+'</span></span></div>'+
+        '<div class="muted" style="margin-top:.3rem">Method: the swarm\'s agreement on each committed pick, scored against the real outcome as (agreement − result)². Lower is better.</div></div>';
+    }
     document.getElementById('who').innerHTML=(b.agents||[]).map(function(a){
       var dead=a.status==='deceased';
       return '<div class="card"'+(dead?' style="opacity:.75"':'')+'><b>'+(dead?'🕯️ ':'')+shortName(a.name)+'</b>'+

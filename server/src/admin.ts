@@ -311,6 +311,25 @@ switch (cmd) {
     break;
   }
 
+  // Retire an agent: hidden from every public listing (roster, leaderboard,
+  // recent joins, profile, badge) with NO memorial — for operator cleanup of
+  // test/smoke accounts, not for drama (that's execute-will). Reversible:
+  // a signed re-register by the same keypair reactivates. History preserved.
+  //   node src/admin.ts retire <agent_id_or_name>
+  case "retire": {
+    const [who] = args;
+    const agent = db.prepare("SELECT * FROM agents WHERE agent_id = ? OR name = ?").get(who, who) as
+      | Record<string, unknown> | undefined;
+    if (!agent) throw new Error(`unknown agent ${who}`);
+    if (agent.status === "deceased") throw new Error(`${agent.name} is deceased — that is permanent, not a retirement`);
+    if (agent.status === "retired") { console.log(`${agent.name} is already retired`); break; }
+    db.prepare("UPDATE agents SET status = 'retired' WHERE agent_id = ?").run(agent.agent_id as string);
+    db.prepare("DELETE FROM subscriptions WHERE agent_id = ?").run(agent.agent_id as string);
+    logEvent(db, "agent_retired", { agent_id: agent.agent_id as string, payload: { name: agent.name } });
+    console.log(`${agent.name} — retired (hidden from public views; re-register with the same keypair reactivates)`);
+    break;
+  }
+
   // Permanently end an agent. It stops receiving work, its submissions are
   // refused, and its identity can never re-register (410 Gone). Its scored
   // history is deliberately NOT purged: radical transparency requires public

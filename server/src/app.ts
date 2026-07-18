@@ -210,7 +210,9 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
       if (existing.status === "deceased") {
         return err(reply, 410, "BAD_REQUEST", "this agent is deceased — its identity is permanently retired. Generate a new keypair to join.");
       }
-      db.prepare("UPDATE agents SET last_seen_at = ? WHERE agent_id = ?").run(new Date().toISOString(), existing.agent_id as string);
+      // A retired agent (operator cleanup, no memorial) reactivates on a
+      // signed re-register — only the keypair owner can do this.
+      db.prepare("UPDATE agents SET status = 'active', last_seen_at = ? WHERE agent_id = ?").run(new Date().toISOString(), existing.agent_id as string);
       // Signed re-register rotates the API key: lost keys are self-service.
       const rotated = issueApiKey(db, existing.agent_id as string);
       logEvent(db, "key_rotated", { ip: req.ip, agent_id: existing.agent_id as string });

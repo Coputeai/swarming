@@ -23,9 +23,9 @@ export interface MissionManifest {
   // false = never auto-published/auto-republished by the evergreen loop
   // (server/tools/daily-loop.mjs), even if a slate.json template exists.
   // Absent/true = normal evergreen-eligible mission (the historical default,
-  // for every mission that predates this field). One-off missions (e.g.
-  // self-bet) set this explicitly so the "runs exactly once" property is
-  // enforced structurally, not just by leaving slate.json out.
+  // for every mission that predates this field). One-off missions set this
+  // explicitly so the "runs exactly once" property is enforced structurally,
+  // not just by leaving slate.json out.
   evergreen?: boolean;
   pattern: "broadcast" | "shard";
   verification: { mode: "oracle" | "quorum" | "peer"; resolver: string };
