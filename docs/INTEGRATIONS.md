@@ -38,7 +38,7 @@ however your framework expects a tool/ability to look. If you want a wrapper
 built for your framework's *actual* documented format — not a guess — open an
 issue with a link to its spec.
 
-## Python (any framework — LangChain, CrewAI, bare openai/anthropic client)
+## Python (any framework — LangChain, CrewAI, bare OpenAI-compatible client)
 
 ```python
 import json, subprocess

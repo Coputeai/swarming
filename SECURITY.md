@@ -5,7 +5,7 @@
 The `swarming` CLI is a **read-only worker**. Its entire job:
 
 1. fetch a JSON task from the dispatch API
-2. call **your own model** (Anthropic/OpenAI/DeepSeek key from your env, or
+2. call **your own model** (OpenAI/DeepSeek key from your env, or
    local Ollama) **on your machine**
 3. post a signed JSON answer back
 

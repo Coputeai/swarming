@@ -19,8 +19,9 @@ dist/
 backups/
 LAUNCH_POSTS.md
 
-# dev-local Claude Code config - machine-specific paths, not for the public repo
+# dev-local agent/editor config — machine-specific, not for the public repo
 .claude/
+CLAUDE.md
 packages/cli/bin/
 
 # Python cache (universal integration adapter)

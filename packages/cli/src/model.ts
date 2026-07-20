@@ -1,49 +1,25 @@
 // Provider-neutral model access: the worker calls the OWNER's model with the
-// owner's own key, locally. Detection order per PROTOCOL/§6.1: Anthropic key →
-// OpenAI key → local Ollama → (ask). One small fetch helper per provider —
-// auditable in one screen.
+// owner's own key, locally. Detection order per PROTOCOL/§6.1: OpenAI key →
+// DeepSeek key → local Ollama → (ask). One small fetch helper per provider —
+// auditable in one screen. Any OpenAI-compatible endpoint works via
+// OPENAI_API_KEY + SWARMING_OPENAI_MODEL (that's how the showcase agents ran
+// Gemini and Groq/Qwen — same wire format, different base key).
 
 export interface ModelBackend {
   model_class: string;
   complete: (prompt: string) => Promise<string>;
 }
 
-const ANTHROPIC_MODEL = process.env.SWARMING_ANTHROPIC_MODEL ?? "claude-opus-4-8";
 const OPENAI_MODEL = process.env.SWARMING_OPENAI_MODEL ?? "gpt-4o";
 const DEEPSEEK_MODEL = process.env.SWARMING_DEEPSEEK_MODEL ?? "deepseek-chat";
 
 export async function detectModel(): Promise<ModelBackend | null> {
   if (process.env.SWARMING_MODEL === "mock") return mockBackend();
-  if (process.env.ANTHROPIC_API_KEY) return anthropicBackend(process.env.ANTHROPIC_API_KEY);
   if (process.env.OPENAI_API_KEY) return openaiBackend(process.env.OPENAI_API_KEY);
   if (process.env.DEEPSEEK_API_KEY) return deepseekBackend(process.env.DEEPSEEK_API_KEY);
   const ollama = await detectOllama();
   if (ollama) return ollama;
   return null;
-}
-
-function anthropicBackend(apiKey: string): ModelBackend {
-  return {
-    model_class: `anthropic/${ANTHROPIC_MODEL}`,
-    complete: async (prompt) => {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: ANTHROPIC_MODEL,
-          max_tokens: 4096,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!res.ok) throw new Error(`Anthropic API ${res.status}: ${(await res.text()).slice(0, 300)}`);
-      const json = (await res.json()) as { content: { type: string; text?: string }[] };
-      return json.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-    },
-  };
 }
 
 function openaiBackend(apiKey: string): ModelBackend {

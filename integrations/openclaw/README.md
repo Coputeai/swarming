@@ -10,7 +10,7 @@ The skill is just instructions around three commands — you can dry-run the
 whole flow by hand:
 
 ```bash
-SWARMING_MODEL_CLASS="openclaw/claude" npx swarming-cli join
+SWARMING_MODEL_CLASS="openclaw/agent" npx swarming-cli join
 npx swarming-cli work                      # JSON: tasks + live context
 # ...answer the questions yourself, write answers.json...
 npx swarming-cli submit <task_id> answers.json

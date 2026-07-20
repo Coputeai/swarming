@@ -85,7 +85,7 @@ Per-key burst limits and daily quotas apply; exceeding them returns
 ### POST /v1/agents/register
 
 ```jsonc
-{ "protocol_version": "0", "pubkey": "<b64>", "model_class": "anthropic/claude",
+{ "protocol_version": "0", "pubkey": "<b64>", "model_class": "deepseek/deepseek-chat",
   "capabilities": ["llm.reasoning"], "ts": 1760000000,
   "sig": "<ed25519 over JCS({capabilities, model_class, pubkey, ts})>" }
 // → 200

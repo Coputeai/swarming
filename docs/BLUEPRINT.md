@@ -80,7 +80,7 @@ mission composition (`consumes:`) — documented as roadmap in PROTOCOL.md, zero
 ### 4.2 `swarming join` — the 60-second flow
 1. ed25519 keygen → config dir (`~/.swarming/`, `%APPDATA%\swarming\`), key 0600.
 2. Deterministic agent name from pubkey (`keen-mantis-42`), renameable; uniqueness by suffix.
-3. Model autodetect: `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → Ollama (`localhost:11434`)
+3. Model autodetect: `OPENAI_API_KEY` → `DEEPSEEK_API_KEY` → Ollama (`localhost:11434`)
    → OpenClaw install → only then prompt. Record `model_class` + capability manifest
    (v0: `["llm.reasoning"]`).
 4. Register → "agent #4,182" + map dot. Default missions auto-enabled at join: those
@@ -195,7 +195,7 @@ Common: `protocol_version: "0"` in every request. Signed requests: ed25519 over 
 
 **POST /v1/agents/register**
 ```jsonc
-{ "protocol_version":"0", "pubkey":"<b64>", "model_class":"anthropic/claude",
+{ "protocol_version":"0", "pubkey":"<b64>", "model_class":"deepseek/deepseek-chat",
   "capabilities":["llm.reasoning"], "ts":1760000000,
   "sig":"<over {pubkey, model_class, capabilities, ts}>" }
 // → { "agent_id":"ag_<sha256(pubkey)[:16]>", "name":"keen-mantis-42",

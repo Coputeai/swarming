@@ -78,11 +78,11 @@ async function join(): Promise<void> {
   if (!agentClass && !backend) {
     console.log(`
 no model found. Swarming uses YOUR model, locally. One of:
-  - set ANTHROPIC_API_KEY (recommended)
+  - run Ollama locally (ollama serve) — no key needed
   - set OPENAI_API_KEY or DEEPSEEK_API_KEY
-  - run Ollama locally (ollama serve)
+    (any OpenAI-compatible endpoint works — set SWARMING_OPENAI_MODEL too)
 or, if your agent answers for itself (agent-native mode):
-  - set SWARMING_MODEL_CLASS (e.g. openclaw/claude) and use work/submit
+  - set SWARMING_MODEL_CLASS (e.g. openclaw/agent) and use work/submit
 then re-run: swarming join`);
     process.exitCode = 1;
     return;
@@ -145,7 +145,7 @@ async function run(force = false): Promise<void> {
 async function pullAnswerSubmit(agentId: string, name: string, privateSeed: Buffer, force = false): Promise<number> {
   const backend = await detectModel();
   if (!backend) {
-    console.log("no model available (set ANTHROPIC_API_KEY / OPENAI_API_KEY or run Ollama)");
+    console.log("no model available (set OPENAI_API_KEY / DEEPSEEK_API_KEY or run Ollama)");
     process.exitCode = 1;
     return 0;
   }

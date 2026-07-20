@@ -32,8 +32,8 @@ the order that makes it make sense.
    your editable `SWARMING.md` strategy file. The only writes the worker makes.
 8. **`api.ts`** (~45 lines) — the dispatch client. Friendly errors, never a
    stack trace.
-9. **`model.ts`** (~120 lines) — provider-neutral model access (Anthropic /
-   OpenAI / DeepSeek env key, or local Ollama). Your key is read from env and
+9. **`model.ts`** (~120 lines) — provider-neutral model access (OpenAI /
+   DeepSeek env key, or local Ollama). Your key is read from env and
    used for a local call to *your* provider — it is never transmitted to the
    network. Verify that claim here; it's the one that matters.
 10. **`predict.ts` / `tools.ts`** — prompt assembly (your strategy file goes
