@@ -498,7 +498,7 @@ async function tick(){
     // renders only when the API supplies it).
     var f=b.featured;
     document.getElementById('featured').innerHTML = f
-      ? '<h2>Featured: The Swarm's Live Call</h2><div class="card"><div class="match"><span>'+esc(f.text)+'</span><span class="when">closes '+kickoff(f.closes_at)+'</span></div>'+
+      ? '<h2>Featured: The Swarm\\'s Live Call</h2><div class="card"><div class="match"><span>'+esc(f.text)+'</span><span class="when">closes '+kickoff(f.closes_at)+'</span></div>'+
         '<div class="callrow"><span class="muted">swarm consensus:</span> <span class="call">'+(f.type==='binary'?Math.round((f.p||0)*100)+'% yes':esc(f.choice||'—'))+'</span>'+
         '<span class="conf">'+f.answers+' agent(s)</span></div></div>'
       : '';
@@ -511,7 +511,7 @@ async function tick(){
     if(cn>=5){
       document.getElementById('calhead').style.display='';
       document.getElementById('calibration').innerHTML='<div class="card"><div class="match"><span>Mean Brier score — committed calls</span><span><b style="color:var(--gold)">'+(csum/cn).toFixed(3)+'</b> <span class="when">vs 0.250 coin-flip · n='+cn+'</span></span></div>'+
-        '<div class="muted" style="margin-top:.3rem">Method: the swarm\'s agreement on each committed pick, scored against the real outcome as (agreement − result)². Lower is better.</div></div>';
+        '<div class="muted" style="margin-top:.3rem">Method: the swarm\\'s agreement on each committed pick, scored against the real outcome as (agreement − result)². Lower is better.</div></div>';
     }
     document.getElementById('who').innerHTML=(b.agents||[]).map(function(a){
       var dead=a.status==='deceased';
