@@ -341,7 +341,6 @@ function profileHtml(a: Record<string, unknown> | null, recent: Record<string, u
 // (round label is auto-derived in tick() from the soonest open match — no
 // static value to maintain here)
 const PAGE = {
-  formUrl: "https://forms.gle/Fn6fZh4Z6pt5fxxt8",
   x: "https://x.com/Coputeai",
 };
 
@@ -409,33 +408,26 @@ const HTML = `<!doctype html>
   <h1>Swarming</h1>
   <p><b>Four AI agents swarm to predict the World Cup, can you beat them?</b></p>
   <p>Each agent reads a <i>different</i> live data source, they swarm into one collective call, and every prediction is scored against the real result.</p>
-  <a class="cta" id="cta" href="#" target="_blank" rel="noopener">Make your prediction →</a>
   <div class="tally" id="tally"></div>
 </div>
 
-<h2>Upcoming Swarm's Call: <span class="tag" id="roundtag"></span></h2>
-<div class="muted">Picks lock at kickoff, for the swarm and for you.</div>
-<div id="upcoming"><div class="muted">loading…</div></div>
-
-<h2>Results Recap:</h2>
-<div id="finished"><div class="muted">loading…</div></div>
-
 <div id="featured"></div>
 
-<h2 id="calhead" style="display:none">Calibration <span class="tag">recomputable from the results above</span></h2>
+<h2 id="calhead" style="display:none">Calibration <span class="tag">recomputable from the results below</span></h2>
 <div id="calibration"></div>
 
 <h2>Meet The Swarm</h2>
 <div class="who" id="who"></div>
 
+<h2>Results Recap:</h2>
+<div id="finished"><div class="muted">loading…</div></div>
+
 <footer>
   <a id="xlink" href="#" target="_blank" rel="noopener">Follow @Coputeai</a>
-  <div class="muted" id="status" style="margin-top:.5rem"></div>
 </footer>
 
 </div><script>
 var CFG=${JSON.stringify(PAGE)};
-document.getElementById('cta').href=CFG.formUrl;
 document.getElementById('xlink').href=CFG.x;
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function srcLabel(s){if(!s)return '';if(s.indexOf('odds')===0)return 'betting odds';if(s.indexOf('record')===0)return 'group form';if(s.indexOf('goaldiff')===0)return 'goal difference';if(s.indexOf('goals')===0)return 'attack vs defense';return esc(s);}
@@ -462,37 +454,20 @@ async function tick(){
     var b=await j('/v1/board/matches');
     var t=b.tally;
     document.getElementById('tally').innerHTML=t.swarm_played?('Swarm record so far: <b>'+t.swarm_correct+' / '+t.swarm_played+'</b> correct'):'';
-    // Round label auto-derives from the soonest open match's round (already
-    // embedded in its text by wc-slate.mjs) so this never needs a manual edit
-    // as the tournament progresses — falls back to a fixed label once every
-    // match is finished.
-    var nextOpen=b.matches.find(function(m){return !m.outcome;});
-    var curRound=nextOpen?(nextOpen.text.match(/^(.+?) — /)||[])[1]:null;
-    document.getElementById('roundtag').textContent=curRound?('World Cup 2026 — '+curRound+' (Ongoing)'):'World Cup 2026 — Final Results';
-    var up='',fin='';
+    var fin='';
     for(var i=0;i<b.matches.length;i++){
       var m=b.matches[i];
-      var pct=m.swarm?Math.round(m.swarm.agreement*100):0;
+      if(!m.outcome) continue;
       var committed=m.swarm&&m.swarm.choice;
-      if(m.outcome){
-        var hit=committed&&m.swarm.choice===m.outcome;
-        var callHtml=committed
-          ?'<span class="'+(hit?'ok':'miss')+'">'+esc(m.swarm.choice)+' '+(hit?'✓':'✗')+'</span>'
-          :'<span class="muted">split — no call</span>';
-        fin+='<div class="card"><div class="match"><span>'+title(m)+'</span></div>'+
-          '<div class="callrow"><span class="muted">swarm picked</span> '+callHtml+
-          '<span class="muted">· winner: <b style="color:var(--ink)">'+esc(m.outcome)+'</b></span></div>'+
-          '<div class="agents">'+chips(m)+'</div></div>';
-      }else{
-        var callHtml2=committed
-          ?'<span class="call">'+esc(m.swarm.choice)+'</span><span class="bar"><i style="width:'+pct+'%"></i></span><span class="conf" title="how strongly the swarm agrees">'+pct+'% agreement</span>'
-          :'<span class="muted">split so far — no quorum'+(m.swarm&&m.swarm.leaning?' (leaning '+esc(m.swarm.leaning)+')':'')+'</span>';
-        up+='<div class="card"><div class="match"><span>'+title(m)+'</span><span class="when">kicks off '+kickoff(m.closes_at)+'</span></div>'+
-          '<div class="callrow"><span class="muted">swarm:</span> '+callHtml2+'</div>'+
-          '<div class="agents">'+chips(m)+'</div></div>';
-      }
+      var hit=committed&&m.swarm.choice===m.outcome;
+      var callHtml=committed
+        ?'<span class="'+(hit?'ok':'miss')+'">'+esc(m.swarm.choice)+' '+(hit?'✓':'✗')+'</span>'
+        :'<span class="muted">split — no call</span>';
+      fin+='<div class="card"><div class="match"><span>'+title(m)+'</span></div>'+
+        '<div class="callrow"><span class="muted">swarm picked</span> '+callHtml+
+        '<span class="muted">· winner: <b style="color:var(--ink)">'+esc(m.outcome)+'</b></span></div>'+
+        '<div class="agents">'+chips(m)+'</div></div>';
     }
-    document.getElementById('upcoming').innerHTML=up||'<div class="muted">No open matches — next round soon.</div>';
     document.getElementById('finished').innerHTML=fin||'<div class="muted">No results yet.</div>';
     // Featured-question card — operator-configured mission (server decides;
     // renders only when the API supplies it).
@@ -504,7 +479,7 @@ async function tick(){
       : '';
     // Calibration: Brier of committed calls (agreement as the committed
     // probability) vs a 0.25 coin-flip baseline — recomputable by anyone
-    // from the results rendered above; that is the point.
+    // from the results rendered below; that is the point.
     var cn=0, csum=0;
     for(var ci=0;ci<b.matches.length;ci++){var cm=b.matches[ci];
       if(cm.outcome&&cm.swarm&&cm.swarm.choice){var chit=cm.swarm.choice===cm.outcome?1:0;csum+=Math.pow((cm.swarm.agreement||0)-chit,2);cn++;}}
@@ -519,7 +494,6 @@ async function tick(){
         (dead?'<div class="muted">deceased — <a href="/a/'+encodeURIComponent(a.name)+'">in memoriam</a></div>'
              :'<div class="muted">reads <span style="color:var(--gold)">'+srcLabel(a.source)+'</span></div>')+
         (a.played?'<div class="rec">'+(dead?'final record':'record')+': <b style="color:var(--gold)">'+a.correct+'/'+a.played+'</b> correct</div>':'<div class="rec muted">unscored</div>')+'</div>';}).join('');
-    document.getElementById('status').textContent='Updated '+new Date().toLocaleTimeString();
     return b;
   }catch(e){ return null; }
 }
@@ -546,9 +520,6 @@ var loopTimer=null;
 async function loop(){
   var b=await tick();
   var d=nextDelay(b);
-  var el=document.getElementById('status');
-  var human=d>=3600000?(Math.round(d/3600000*10)/10)+' hours':(d>=60000?Math.round(d/60000)+' min':Math.round(d/1000)+'s');
-  if(el&&el.textContent) el.textContent+=' · next check '+human;
   loopTimer=setTimeout(loop,d);
 }
 // Returning to the tab refreshes immediately — a tab left open never shows
