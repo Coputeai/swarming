@@ -10,6 +10,32 @@ export interface ModelBackend {
   complete: (prompt: string) => Promise<string>;
 }
 
+/**
+ * A failure from the OWNER's model provider — not a bug in swarming, and not
+ * something a raw JSON dump helps with. Carries actionable guidance so a dev
+ * whose key is out of credit / wrong / rate-limited knows exactly what to do.
+ */
+export class ModelProviderError extends Error {
+  provider: string;
+  status: number;
+  constructor(provider: string, status: number, body: string, envVar: string) {
+    const hint =
+      status === 401 || status === 403
+        ? `your ${envVar} was rejected. Check the key is correct and active.`
+        : status === 402
+          ? `your ${provider} account is out of credit. Top it up, switch provider, or unset ${envVar} to fall back to a local Ollama model.`
+          : status === 429
+            ? `${provider} is rate-limiting you. Wait a bit, then run: npx swarming-cli run`
+            : status >= 500
+              ? `${provider} is having server trouble (${status}). Try again shortly: npx swarming-cli run`
+              : `${provider} rejected the request (${status}).`;
+    super(`${provider} — ${hint}\n   provider said: ${body.slice(0, 200)}`);
+    this.name = "ModelProviderError";
+    this.provider = provider;
+    this.status = status;
+  }
+}
+
 const OPENAI_MODEL = process.env.SWARMING_OPENAI_MODEL ?? "gpt-4o";
 const DEEPSEEK_MODEL = process.env.SWARMING_DEEPSEEK_MODEL ?? "deepseek-chat";
 
@@ -31,7 +57,7 @@ function openaiBackend(apiKey: string): ModelBackend {
         headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ model: OPENAI_MODEL, messages: [{ role: "user", content: prompt }] }),
       });
-      if (!res.ok) throw new Error(`OpenAI API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      if (!res.ok) throw new ModelProviderError("OpenAI", res.status, await res.text(), "OPENAI_API_KEY");
       const json = (await res.json()) as { choices: { message: { content: string } }[] };
       return json.choices[0].message.content;
     },
@@ -48,7 +74,7 @@ function deepseekBackend(apiKey: string): ModelBackend {
         headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ model: DEEPSEEK_MODEL, messages: [{ role: "user", content: prompt }] }),
       });
-      if (!res.ok) throw new Error(`DeepSeek API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      if (!res.ok) throw new ModelProviderError("DeepSeek", res.status, await res.text(), "DEEPSEEK_API_KEY");
       const json = (await res.json()) as { choices: { message: { content: string } }[] };
       return json.choices[0].message.content;
     },
@@ -68,7 +94,7 @@ export async function ollamaChat(model: string, prompt: string): Promise<string>
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], stream: false }),
   });
-  if (!res.ok) throw new Error(`Ollama ${res.status}`);
+  if (!res.ok) throw new ModelProviderError("Ollama", res.status, `is the model "${model}" pulled? try: ollama pull ${model}`, "OLLAMA_HOST");
   const j = (await res.json()) as { message: { content: string } };
   return j.message.content;
 }

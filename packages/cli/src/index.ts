@@ -15,7 +15,7 @@ import {
 } from "../../protocol/src/index.ts";
 import { API_BASE, configDir, ensureSwarmingMd, loadIdentity, loadOrCreateKeypair, saveIdentity } from "./config.ts";
 import { api, ApiError, setApiKey } from "./api.ts";
-import { detectModel } from "./model.ts";
+import { detectModel, ModelProviderError } from "./model.ts";
 import { answerTask } from "./predict.ts";
 import { fetchContext } from "./tools.ts";
 import { scheduleDaily } from "./schedule.ts";
@@ -161,7 +161,23 @@ async function pullAnswerSubmit(agentId: string, name: string, privateSeed: Buff
       (task as Task & { context?: string }).context = context;
       console.log(`   data.read: fetched live context for ${context.split("\n").length} source(s)`);
     }
-    const answers = await answerTask(task, name, swarmingMd, backend);
+    // Your model failing is not a swarming failure: report it in plain
+    // language, keep the identity intact, and tell the owner how to resume.
+    // Without this a bad/expired/out-of-credit key left the agent registered
+    // but stranded behind a raw provider JSON dump.
+    let answers;
+    try {
+      answers = await answerTask(task, name, swarmingMd, backend);
+    } catch (e) {
+      if (e instanceof ModelProviderError) {
+        console.log(`   ${BEE} your model didn't answer — ${e.message}`);
+        console.log(`   nothing was submitted for ${task.mission_id}. Your agent "${name}" is registered and keeps its record;`);
+        console.log(`   fix the above and run:  npx swarming-cli run`);
+        process.exitCode = 1;
+        continue;
+      }
+      throw e;
+    }
     const payload = { answers };
     const ts = nowTs();
     const sig = signPayload({ agent_id: agentId, payload_hash: hashCanonical(payload), task_id: task.task_id, ts }, privateSeed);

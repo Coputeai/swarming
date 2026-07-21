@@ -188,7 +188,12 @@ function maybeAdvanceRound(db: DatabaseSync, wu: Record<string, unknown>): void 
 export function buildApp(db: DatabaseSync): FastifyInstance {
   // Behind nginx every socket is 127.0.0.1 — trust X-Forwarded-For there or
   // per-IP limits (e.g. register 5/day) become one shared global bucket.
-  const app = Fastify({ logger: false, trustProxy: process.env.SWARMING_TRUST_PROXY === "1" });
+  // Hop COUNT, not a boolean. `true` would trust every hop and take the
+  // LEFTMOST X-Forwarded-For entry — which the client supplies, since nginx
+  // appends via $proxy_add_x_forwarded_for. That let anyone spoof req.ip and
+  // walk straight past the per-IP register cap and submit limiter. `1` trusts
+  // exactly one hop (our nginx), so req.ip is the address nginx observed.
+  const app = Fastify({ logger: false, trustProxy: process.env.SWARMING_TRUST_PROXY === "1" ? 1 : false });
   const registerLimit = makeLimiter(5, 24 * 60 * 60 * 1000);
   const submitLimit = makeLimiter(20, 60 * 1000);
   const requireKey = makeKeyAuth(db);
@@ -200,6 +205,16 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
     const pubkeyB64 = String(b.pubkey ?? "");
     const pubkey = Buffer.from(pubkeyB64, "base64");
     if (pubkey.length !== 32) return err(reply, 400, "BAD_REQUEST", "pubkey must be raw 32-byte ed25519, base64");
+    // Shape-check before these reach canonicalize/JSON.stringify/the DB: this
+    // is unauthenticated input. capabilities must be a flat string array, and
+    // model_class a bounded string — both are stored verbatim otherwise.
+    if (!Array.isArray(b.capabilities) || b.capabilities.length > 16 ||
+        !b.capabilities.every((c) => typeof c === "string" && c.length <= 64)) {
+      return err(reply, 400, "BAD_REQUEST", "capabilities must be an array of <=16 strings (<=64 chars each)");
+    }
+    if (typeof b.model_class !== "string" || b.model_class.length > 128) {
+      return err(reply, 400, "BAD_REQUEST", "model_class must be a string of <=128 chars");
+    }
     const signed = { capabilities: b.capabilities, model_class: b.model_class, pubkey: pubkeyB64, ts: b.ts };
     if (!verifyPayload(signed, String(b.sig ?? ""), pubkey)) return err(reply, 401, "BAD_SIG", "signature invalid");
 
@@ -401,7 +416,15 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
     );
     if (!enabled) return err(reply, 403, "NOT_ENABLED", "agent has not enabled this mission");
 
-    const signed = { agent_id: b.agent_id, payload_hash: hashCanonical(b.payload), task_id: taskId, ts: b.ts };
+    // hashCanonical can reject malformed/over-nested payloads — that's a
+    // client error (400), not a server crash (500).
+    let payloadHash: string;
+    try {
+      payloadHash = hashCanonical(b.payload);
+    } catch (e) {
+      return err(reply, 400, "BAD_REQUEST", `payload could not be canonicalized: ${e instanceof Error ? e.message : "invalid"}`);
+    }
+    const signed = { agent_id: b.agent_id, payload_hash: payloadHash, task_id: taskId, ts: b.ts };
     if (!verifyPayload(signed, String(b.sig ?? ""), Buffer.from(agent.pubkey, "base64"))) {
       return err(reply, 401, "BAD_SIG", "signature invalid");
     }

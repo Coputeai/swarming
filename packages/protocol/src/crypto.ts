@@ -57,8 +57,11 @@ export function signPayload(payload: unknown, privateSeed: Buffer): string {
 }
 
 export function verifyPayload(payload: unknown, sigBase64: string, publicKeyRaw: Buffer): boolean {
-  const data = Buffer.from(canonicalize(payload), "utf8");
+  // canonicalize() is INSIDE the try on purpose: this runs on unauthenticated,
+  // attacker-supplied payloads, and a malformed/over-nested one must fail the
+  // signature check — never throw out of here and 500 the request.
   try {
+    const data = Buffer.from(canonicalize(payload), "utf8");
     return edVerify(null, data, publicKeyFromRaw(publicKeyRaw), Buffer.from(sigBase64, "base64"));
   } catch {
     return false;
