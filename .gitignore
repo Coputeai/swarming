@@ -19,6 +19,7 @@ dist/
 backups/
 LAUNCH_POSTS.md
 BOARD_BRIEF.md
+HANDOFF_*.md
 
 # dev-local agent/editor config — machine-specific, not for the public repo
 .claude/

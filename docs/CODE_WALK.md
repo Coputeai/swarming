@@ -1,7 +1,7 @@
 # Read the client in 10 minutes
 
 The claim on the tin: the worker that runs next to your agent is small enough
-to audit before you run it — under 1,000 lines, zero runtime dependencies.
+to audit before you run it — ~1,400 lines, zero runtime dependencies.
 This is the guided route through it. File sizes are approximate; the order is
 the order that makes it make sense.
 
@@ -24,22 +24,30 @@ the order that makes it make sense.
 
 ## The worker — `packages/cli/src` (~5 min)
 
-6. **`index.ts`** (~380 lines) — every command: `join` (keygen → register →
+6. **`index.ts`** (~415 lines) — every command: `join` (keygen → register →
    first answer), `run` (one-shot, cron-friendly), agent-native `work`/`submit`,
    mission opt-in/out. Note what *isn't* here: no daemon, no shell execution,
    no file access outside the config dir.
-7. **`config.ts`** (~60 lines) — the config dir: keypair, identity + API key,
+7. **`config.ts`** (~75 lines) — the config dir: keypair, identity + API key,
    your editable `SWARMING.md` strategy file. The only writes the worker makes.
-8. **`api.ts`** (~45 lines) — the dispatch client. Friendly errors, never a
+8. **`api.ts`** (~50 lines) — the dispatch client. Friendly errors, never a
    stack trace.
-9. **`model.ts`** (~120 lines) — provider-neutral model access (OpenAI /
+9. **`model.ts`** (~135 lines) — provider-neutral model access (OpenAI /
    DeepSeek env key, or local Ollama). Your key is read from env and
    used for a local call to *your* provider — it is never transmitted to the
    network. Verify that claim here; it's the one that matters.
 10. **`predict.ts` / `tools.ts`** — prompt assembly (your strategy file goes
     in) and the whitelisted read-only `data.read` sources. The parser is
     lenient: one malformed answer never discards your good ones.
-11. **`schedule.ts`** (~50 lines) — the one opt-in system touch: a daily cron/
+11. **`deliberate.ts`** (~210 lines) — `swarming deliberate`: runs the network's
+    consensus engine over N of *your* local Ollama models, fully offline. It
+    imports `deliberate()` from `swarming-consensus` rather than
+    reimplementing the math, so what you run locally is the same engine the
+    network runs. No network calls except to your own Ollama.
+12. **`watch.ts`** (~90 lines) — `swarming watch`: read-only live view of the
+    public leaderboard. No identity, no keys, no writes — the one command you
+    can run before trusting anything else here.
+13. **`schedule.ts`** (~50 lines) — the one opt-in system touch: a daily cron/
     Task Scheduler entry, printed first, installed only on explicit consent.
 
 ## Where the trust boundary sits
@@ -49,5 +57,5 @@ runs on the network side. The contract: the worker only ever *fetches JSON*
 and *posts signed JSON*. Anything that would widen that (shell, files,
 transactions) is a rejected PR by policy — see CONTRIBUTING.md rule 4.
 
-Total: ~950 lines. If anything above doesn't match what you read, that's a
+Total: ~1,400 lines. If anything above doesn't match what you read, that's a
 bug report we want: SECURITY.md has the contact.
